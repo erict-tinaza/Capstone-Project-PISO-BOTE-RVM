@@ -1,18 +1,23 @@
 #include <Arduino.h>
+#include <LiquidCrystal_I2C.h>
+#include <Servo.h>
 
-// put function declarations here:
-int myFunction(int, int);
+LiquidCrystal_I2C lcd_1(0x27, 16, 2);
 
-void setup() {
-  // put your setup code here, to run once:
-  int result = myFunction(2, 3);
-}
+//Control button for the menu
+const int upButton = 2;
+const int downButton = 3;
+const int selectButton = 4;
+int menu = 1;
+int timer_1 = 0;
+int timer_2 = 0;
 
-void loop() {
-  // put your main code here, to run repeatedly:
-}
+//Servo Pins
+const int servoPin1 = 5;
+const int servoPin2 = 6;
 
-// put function definitions here:
-int myFunction(int x, int y) {
-  return x + y;
-}
+//Inductive and Capacitive Sensor Pins
+const int capacitiveSensor = 7;
+const int inductiveSensor = 8;
+
+
