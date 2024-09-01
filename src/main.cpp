@@ -5,8 +5,6 @@
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 Servo servo1;
 Servo servo2;
-
-// Control button for the menu
 const int upButton = 2;
 const int downButton = 3;
 const int selectButton = 4;
@@ -22,6 +20,9 @@ const int servoPin2 = 6;
 const int capacitiveSensorPin = 7;
 const int inductiveSensorPin = 8;
 
+//Global variables
+bool isObjectInside = false;
+bool isPlasticBottle= false;
 
 // Function definitions here
 int readCapacitiveSensorData(){
@@ -64,8 +65,30 @@ void waitForObjectPresence(){
   }
   lcd.clear();
   lcd.print("Object present");
-  
-  
+  isObjectInside = true;  
+}
+bool verifyObject(){
+  if(isObjectInside){
+    lcd.clear();
+    lcd.print("Verifying....");
+    delay(2000);
+    if(readCapacitiveSensorData() == 1 && readInductiveSensorData() == 1){
+      lcd.clear();
+      //lcd.print(readInductiveSensorData());
+      lcd.print("Verified");
+      openCloseBinLid(2, true);
+      delay(3000);
+      openCloseBinLid(2, false);
+     delay(3000);
+      return true;
+    }
+    else{
+      lcd.clear();
+      lcd.print("Invalid");
+      delay(1000);
+      return false;
+    }
+  }
 }
 
 void updateMenu(){
@@ -100,6 +123,8 @@ void deposit(){
   delay(3000);
   waitForObjectPresence();
   openCloseBinLid(1, false);
+  verifyObject();
+  
 }
 
 void redeem(){
@@ -128,7 +153,8 @@ void setup(){
   
   servo1.attach(servoPin1);
   servo2.attach(servoPin2);
-  
+  openCloseBinLid(1, false);
+  openCloseBinLid(2, false);
   updateMenu();
   Serial.begin(9600);  
 }
