@@ -20,10 +20,39 @@ const int servoPin2 = 6;
 const int capacitiveSensorPin = 7;
 const int inductiveSensorPin = 8;
 
+
+//RGB Module pins
+const int PIN_RED = 9;
+const int PIN_GREEN = 10;
+const int PIN_BLUE = 11;
+
+
 //Global variables
 bool isObjectInside = false;
 bool isPlasticBottle= false;
 
+void ledStatusCode(int errorCode){
+  switch (errorCode)
+  {
+  case 200:/*Green Indicator = Ok */
+    /* code */
+    analogWrite(PIN_RED, 0);
+    analogWrite(PIN_GREEN, 255);
+    analogWrite(PIN_BLUE, 0);
+    break;
+    case 102: // Orange indicator = Processing
+      analogWrite(PIN_RED, 255);
+      analogWrite(PIN_GREEN, 60);
+      analogWrite(PIN_BLUE, 5);
+    break;
+    case 404: //Red indicator = error
+      analogWrite(PIN_RED, 255);
+      analogWrite(PIN_GREEN, 0);
+      analogWrite(PIN_BLUE, 0);
+  default:
+    break;
+  }
+}
 // Function definitions here
 int readCapacitiveSensorData(){
   int sensorVal = digitalRead(capacitiveSensorPin);
@@ -151,6 +180,12 @@ void setup(){
   pinMode(capacitiveSensorPin, INPUT);
   pinMode(inductiveSensorPin, INPUT);
   
+  // RGB PINS
+  pinMode(PIN_RED,OUTPUT);
+  pinMode(PIN_GREEN,OUTPUT);
+  pinMode(PIN_BLUE,OUTPUT);
+  ledStatusCode(200);
+
   servo1.attach(servoPin1);
   servo2.attach(servoPin2);
   openCloseBinLid(1, false);
