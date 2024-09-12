@@ -6,7 +6,7 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 Servo servo1;
 Servo servo2;
 
-//TODO: SIM800L can needs atleast 6.2v from the dcd to dc converter
+//TODO: SIM800L can needs atleast 6.2v from the dc to dc converter or add a 16V 1000 microfarads capacitor to provide enough power to the module
 
 // Pin definitions
 const int upButton = 2;
@@ -101,12 +101,15 @@ void delayWithMsg(unsigned long duration, String message1, String message2, int 
 }
 
 int readCapacitiveSensorData() {
+    delay(100);
     return digitalRead(capacitiveSensorPin);
 }
 
 int readInductiveSensorData() {
+    delay(100);
     return digitalRead(inductiveSensorPin);
 }
+
 
 void rotateServo(Servo &servo, int angle) {
     servo.write(angle);
