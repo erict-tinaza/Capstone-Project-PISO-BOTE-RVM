@@ -25,7 +25,7 @@ const int POINTS_BLOCK = 4; //Block were the poinst will be stored in the RFID m
 //RFID PIN Definitions
 #define SS_PIN 30
 #define RST_PIN 22
-MFRC522::StatusCode authenicateBlock(int blockNumber);
+MFRC522::StatusCode authenticateBlock(int blockNumber);
 MFRC522 mfrc522 (SS_PIN, RST_PIN);
 MFRC522::MIFARE_Key key;
 
@@ -55,7 +55,7 @@ void redeemAction();
 void redeemPointsAction();
 void setUpRFID();
 bool detectCard();
-void writePoints(int points);
+bool writePoints(int points);
 void incrementPoints(int amout);
 void decrementPoints(int amount);
 void displayPoints(int points);
@@ -359,7 +359,7 @@ void loop() {
 
 // RFID Functions
 
-void setupRFID(){
+void setUpRFID(){
     SPI.begin();
     mfrc522.PCD_Init();
     for(byte i = 0; i < 6; i++){
@@ -380,7 +380,7 @@ int readPoints(){
     byte buffer[18];
     byte size = sizeof(buffer);
 
-    MFRC522::StatusCode status = authenicateBlock(POINTS_BLOCK);
+    MFRC522::StatusCode status = authenticateBlock(POINTS_BLOCK);
     if(status !=MFRC522::STATUS_OK){
         Serial.println("Authentication Failed.");
         return -1;
@@ -393,4 +393,50 @@ int readPoints(){
     }
     int points = (buffer[0] << 0) | buffer[1]; // Combine two bytes into an int
     return points;
+}
+
+bool writePoints(int points) {
+    byte buffer[16];
+    buffer[0] = (points >> 8) & 0xFF; // High byte
+    buffer[1] = points & 0xFF;        // Low byte
+
+    MFRC522::StatusCode status = authenticateBlock(POINTS_BLOCK);
+    if (status != MFRC522::STATUS_OK) {
+        Serial.println("Authentication failed");
+        return false;
+    }
+
+    status = mfrc522.MIFARE_Write(POINTS_BLOCK, buffer, 16);
+    if (status != MFRC522::STATUS_OK) {
+        Serial.println("Writing failed");
+        return false;
+    }
+    Serial.println("Points updated successfully");
+    return true;
+}
+
+void incrementPoints(int amount){
+    int currentPoints = readPoints();
+    if(currentPoints < 0) return;
+
+    int newPoints = currentPoints + amount;
+    if(writePoints(newPoints))
+        displayPoints(newPoints);
+    
+}
+
+void decrementPoints(int amount){
+    int currentPoints = readPoints();
+    if(currentPoints < 0) return;
+
+    int newPoints = currentPoints - amount;
+    if(newPoints < 0) newPoints = 0; //Prevents point from dropping to negative 
+
+    if(writePoints(newPoints)) 
+        displayPoints(newPoints);
+}
+
+MFRC522::StatusCode authenticateBlock(int blockNumber){
+    return mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A,
+    blockNumber, &key, &(mfrc522.uid));
 }
