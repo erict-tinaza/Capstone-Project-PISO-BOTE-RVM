@@ -1,13 +1,15 @@
 #include <Arduino.h>
 #include <LiquidCrystal_I2C.h>
 #include <Servo.h>
-
+#include <MFRC522.h>
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 Servo servo1;
 Servo servo2;
 
-//TODO: SIM800L can needs atleast 6.2v from the dc to dc converter or add a 16V 1000 microfarads capacitor to provide enough power to the module
-
+/*TODO: SIM800L can needs atleast 6.2v from the dc to dc converter or 
+*Fix the issue by replacing the capacitor of the module by a 16V 1000 microfarads capacitor to provide enough power to the module
+*during high peak usage of the said module.
+*/
 // Pin definitions
 const int upButton = 2;
 const int downButton = 3;
@@ -19,6 +21,15 @@ const int inductiveSensorPin = 8;
 const int PIN_RED = 9;
 const int PIN_GREEN = 10;
 const int PIN_BLUE = 11;
+const int POINTS_BLOCK = 4; //Block were the poinst will be stored in the RFID memory
+//RFID PIN Definitions
+#define SS_PIN 30
+#define RST_PIN 22
+MFRC522::StatusCode authenicateBlock(int blockNumber);
+MFRC522 mfrc522 (SS_PIN, RST_PIN);
+MFRC522::MIFARE_Key key;
+
+
 
 // Global variables
 bool isObjectInside = false;
@@ -42,6 +53,12 @@ struct Menu {
 void depositAction();
 void redeemAction();
 void redeemPointsAction();
+void setUpRFID();
+bool detectCard();
+void writePoints(int points);
+void incrementPoints(int amout);
+void decrementPoints(int amount);
+void displayPoints(int points);
 
 // Define menu items
 MenuItem mainMenuItems[] = {
@@ -338,4 +355,42 @@ void loop() {
     if (digitalRead(selectButton) == LOW) {
         selectMenuItem();
     }
+}
+
+// RFID Functions
+
+void setupRFID(){
+    SPI.begin();
+    mfrc522.PCD_Init();
+    for(byte i = 0; i < 6; i++){
+        key.keyByte[i] = 0xFF;
+    }
+    Serial.println("RFID System ready. Present a card.");
+}
+
+bool detectCard(){
+    if(mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()){
+        Serial.println("Card detected");
+        return true;
+    }
+    return false;
+}
+
+int readPoints(){
+    byte buffer[18];
+    byte size = sizeof(buffer);
+
+    MFRC522::StatusCode status = authenicateBlock(POINTS_BLOCK);
+    if(status !=MFRC522::STATUS_OK){
+        Serial.println("Authentication Failed.");
+        return -1;
+    }
+
+    status = mfrc522.MIFARE_Read(POINTS_BLOCK, buffer, &size);
+    if(status != MFRC522::STATUS_OK){
+        Serial.println("Reading failed.");
+        return -1;
+    }
+    int points = (buffer[0] << 0) | buffer[1]; // Combine two bytes into an int
+    return points;
 }
