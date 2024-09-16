@@ -23,18 +23,13 @@ const int PIN_GREEN = 10;
 const int PIN_BLUE = 11;
 const int POINTS_BLOCK = 4; //Block were the poinst will be stored in the RFID memory
 //RFID PIN Definitions
-#define SS_PIN 30
-#define RST_PIN 22
+#define SS_PIN 53 //Green
+#define RST_PIN 49 //Grey
 MFRC522::StatusCode authenticateBlock(int blockNumber);
 MFRC522 mfrc522 (SS_PIN, RST_PIN);
 MFRC522::MIFARE_Key key;
 
 
-
-// Global variables
-bool isObjectInside = false;
-int totalPoints = 10;  
-int pointsToRedeem = 0;
 
 // Menu structure
 struct MenuItem {
@@ -59,6 +54,13 @@ bool writePoints(int points);
 void incrementPoints(int amout);
 void decrementPoints(int amount);
 void displayPoints(int points);
+int readPoints();
+
+
+// Global variables
+bool isObjectInside = false;
+int totalPoints = 0; 
+int pointsToRedeem = 0;
 
 // Define menu items
 MenuItem mainMenuItems[] = {
@@ -248,10 +250,28 @@ void depositAction() {
         delay(2000);
     }
 }
-
 void redeemAction() {
-    pointsToRedeem = 0;
-    redeemPointsAction();
+    lcd.clear();
+    lcd.print("Present RFID card");
+    
+    unsigned long startTime = millis();
+    while (millis() - startTime < 10000) { // Wait for 10 seconds
+        if (detectCard()) {
+            int currentPoints = readPoints();
+            if (currentPoints >= 0) {
+                totalPoints = currentPoints;  // Update totalPoints from RFID
+                pointsToRedeem = 0;
+                redeemPointsAction();
+                mfrc522.PICC_HaltA();
+                mfrc522.PCD_StopCrypto1();
+                return;
+            }
+        }
+        delay(100);
+    }
+    lcd.clear();
+    lcd.print("No card detected");
+    delay(2000);
 }
 
 void redeemPointsAction() {
@@ -296,13 +316,21 @@ void redeemPointsAction() {
         if (digitalRead(selectButton) == LOW) {
             // Confirm redemption
             totalPoints -= pointsToRedeem;
-            lcd.clear();
-            lcd.print("Redeemed: ");
-            lcd.print(pointsToRedeem);
-            lcd.setCursor(0, 1);
-            lcd.print("Remaining: ");
-            lcd.print(totalPoints);
-            ledStatusCode(200);
+            if (writePoints(totalPoints)) {
+                lcd.clear();
+                lcd.print("Redeemed: ");
+                lcd.print(pointsToRedeem);
+                lcd.setCursor(0, 1);
+                lcd.print("Remaining: ");
+                lcd.print(totalPoints);
+                ledStatusCode(200);
+            } else {
+                lcd.clear();
+                lcd.print("Failed to update");
+                lcd.setCursor(0, 1);
+                lcd.print("card. Try again.");
+                ledStatusCode(404);
+            }
             delay(2000);
             break;
         }
@@ -343,6 +371,7 @@ void setup() {
     
     updateMenuDisplay();
     Serial.begin(9600);
+    setUpRFID();
 }
 
 void loop() {
