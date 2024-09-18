@@ -2,6 +2,9 @@
 #include <LiquidCrystal_I2C.h>
 #include <Servo.h>
 #include <MFRC522.h>
+#include <SoftwareSerial.h>
+#include <NewPing.h>
+
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 Servo servo1;
 Servo servo2;
@@ -28,7 +31,16 @@ const int POINTS_BLOCK = 4; // Block were the poinst will be stored in the RFID 
 MFRC522::StatusCode authenticateBlock(int blockNumber);
 MFRC522 mfrc522(SS_PIN, RST_PIN);
 MFRC522::MIFARE_Key key;
-
+// Ultrasonic and SIM800L Pins
+const int TRIGGER_PIN = 22;
+const int ECHO_PIN = 23;
+const unsigned int MAX_DISTANCE = 20;
+const int ITERATIONS = 5;
+const int SIM_RX = 24;
+const int SIM_TX = 25;
+NewPing sonar(TRIGGER_PIN, ECHO_PIN, MAX_DISTANCE);
+SoftwareSerial sim800lv2(SIM_RX, SIM_TX);
+String maintainerNum = "+639219133878";
 // Menu structure
 struct MenuItem
 {
@@ -57,12 +69,14 @@ void incrementPoints(int amout);
 void decrementPoints(int amount);
 void displayPoints(int points);
 int readPoints();
-
+void sendSMS(String message);
+bool isBinFull();
+void handleMaintenanceMode();
 // Global variables
 bool isObjectInside = false;
 int totalPoints = 0;
 int pointsToRedeem = 0;
-
+bool maintenanceMode = false;
 // Define menu items
 MenuItem mainMenuItems[] = {
     {"Deposit", depositAction},
@@ -272,6 +286,15 @@ void selectMenuItem()
 
 void depositAction()
 {
+     if (maintenanceMode)
+    {
+        lcd.clear();
+        lcd.print("PISO-BOTE is full");
+        lcd.setCursor(0, 1);
+        lcd.print("Try again later");
+        delay(2000);
+        return;
+    }
     lcd.clear();
     lcd.print("Opening bin....");
     openCloseBinLid(1, true);
@@ -341,6 +364,15 @@ void storePointsAction()
 }
 void redeemAction()
 {
+    if (maintenanceMode)
+    {
+        lcd.clear();
+        lcd.print("PISO-BOTE is full");
+        lcd.setCursor(0, 1);
+        lcd.print("Try again later");
+        delay(2000);
+        return;
+    }
     lcd.clear();
     lcd.print("Present RFID card");
 
@@ -367,7 +399,8 @@ void redeemAction()
     delay(2000);
 }
 
-void redeemPointsAction() {
+void redeemPointsAction()
+{
     lcd.clear();
     lcd.print("Redeem Points");
     lcd.setCursor(0, 1);
@@ -376,40 +409,52 @@ void redeemPointsAction() {
 
     unsigned long lastButtonPress = 0;
     int holdTime = 0;
-    const int maxRedeemable = min(totalPoints, 20);  // Max 50 points or total points, whichever is less
+    const int maxRedeemable = min(totalPoints, 20); // Max 50 points or total points, whichever is less
     delay(1000);
-    while (true) {
+    while (true)
+    {
         lcd.setCursor(8, 1);
-        lcd.print("    ");  // Clear previous number
+        lcd.print("    "); // Clear previous number
         lcd.setCursor(8, 1);
         lcd.print(pointsToRedeem);
 
-        if (digitalRead(upButton) == LOW) {
-            if (millis() - lastButtonPress > 200) {
-                if (pointsToRedeem < maxRedeemable) {
-                    pointsToRedeem += 1 + (holdTime / 1000);  // Increase increment speed when held
+        if (digitalRead(upButton) == LOW)
+        {
+            if (millis() - lastButtonPress > 200)
+            {
+                if (pointsToRedeem < maxRedeemable)
+                {
+                    pointsToRedeem += 1 + (holdTime / 1000); // Increase increment speed when held
                     pointsToRedeem = min(pointsToRedeem, maxRedeemable);
                 }
                 lastButtonPress = millis();
                 holdTime += 200;
             }
-        } else if (digitalRead(downButton) == LOW) {
-            if (millis() - lastButtonPress > 200) {
-                if (pointsToRedeem > 0) {
-                    pointsToRedeem -= 1 + (holdTime / 1000);  // Increase decrement speed when held
+        }
+        else if (digitalRead(downButton) == LOW)
+        {
+            if (millis() - lastButtonPress > 200)
+            {
+                if (pointsToRedeem > 0)
+                {
+                    pointsToRedeem -= 1 + (holdTime / 1000); // Increase decrement speed when held
                     pointsToRedeem = max(pointsToRedeem, 0);
                 }
                 lastButtonPress = millis();
                 holdTime += 200;
             }
-        } else {
+        }
+        else
+        {
             holdTime = 0;
         }
 
-        if (digitalRead(selectButton) == LOW) {
+        if (digitalRead(selectButton) == LOW)
+        {
             // Confirm redemption
             totalPoints -= pointsToRedeem;
-            if (writePoints(totalPoints)) {
+            if (writePoints(totalPoints))
+            {
                 lcd.clear();
                 lcd.print("Redeemed: ");
                 lcd.print(pointsToRedeem);
@@ -417,7 +462,9 @@ void redeemPointsAction() {
                 lcd.print("Remaining: ");
                 lcd.print(totalPoints);
                 ledStatusCode(200);
-            } else {
+            }
+            else
+            {
                 lcd.clear();
                 lcd.print("Failed to update");
                 lcd.setCursor(0, 1);
@@ -425,25 +472,26 @@ void redeemPointsAction() {
                 ledStatusCode(404);
             }
             delay(2000);
-            currentMenu = &mainMenu;  // Return to main menu
+            currentMenu = &mainMenu; // Return to main menu
             updateMenuDisplay();
             break;
         }
 
         // Long press select button to cancel
-        if (digitalRead(selectButton) == LOW && millis() - lastButtonPress > 2000) {
+        if (digitalRead(selectButton) == LOW && millis() - lastButtonPress > 2000)
+        {
             lcd.clear();
             lcd.print("Redemption");
             lcd.setCursor(0, 1);
             lcd.print("Cancelled");
             delay(2000);
             pointsToRedeem = 0;
-            currentMenu = &mainMenu;  // Return to main menu
+            currentMenu = &mainMenu; // Return to main menu
             updateMenuDisplay();
             break;
         }
 
-        delay(50);  // Small delay for button debounce
+        delay(50); // Small delay for button debounce
     }
 }
 void setup()
@@ -470,10 +518,24 @@ void setup()
     updateMenuDisplay();
     Serial.begin(9600);
     setUpRFID();
+    sim800lv2.begin(9600);
+    delay(1000);
+    // Test SMS functionality
+    sendSMS("PISO-BOTE system initialized");
 }
 
 void loop()
 {
+    if (maintenanceMode)
+    {
+        handleMaintenanceMode();
+        return;
+    }
+    if (isBinFull())
+    {
+        maintenanceMode = true;
+        return;
+    }
     if (digitalRead(downButton) == LOW)
     {
         navigateMenu(1);
@@ -486,6 +548,12 @@ void loop()
     {
         selectMenuItem();
     }
+    //Checks to see if the bin is full each end of the loop
+    if (isBinFull())
+    {
+        maintenanceMode = true;
+    }
+    delay(500);
 }
 
 // RFID Functions
@@ -585,4 +653,54 @@ MFRC522::StatusCode authenticateBlock(int blockNumber)
 {
     return mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A,
                                     blockNumber, &key, &(mfrc522.uid));
+}
+
+// Functions for maintenance
+
+void sendSMS(String message)
+{
+    sim800lv2.println("AT+CMGF=1");
+    delay(1000);
+    sim800lv2.println("AT+CMGS=\"" + maintainerNum + "\"");
+    delay(1000);
+    sim800lv2.println(message);
+    delay(100);
+    sim800lv2.println((char)26);
+    delay(1000);
+    Serial.println("Owner has been notified!");
+}
+
+bool isBinFull()
+{
+    unsigned int duration = sonar.ping_median(ITERATIONS);
+    float distance = (duration / 2.0) * 0.0343;
+    if (distance > 0 && distance <= 5)
+    {
+        Serial.println("Bin full! Entering maintenance mode...");
+        sendSMS("Alert: The PISO-BOTE is full! Please empty it.");
+        ledStatusCode(404); 
+        return true;
+    }
+    else{
+        return false;
+    }
+}
+
+void handleMaintenanceMode()
+{
+    lcd.clear();
+    lcd.print("PISO-BOTE is full");
+    lcd.setCursor(0, 1);
+    lcd.print("Please wait...");
+
+    while (isBinFull()) 
+    {
+        ledStatusCode(404);
+        delay(5000);
+    }
+    maintenanceMode = false; 
+    lcd.clear();
+    lcd.print("PISO-BOTE ready");
+    ledStatusCode(200); 
+    delay(2000);
 }
