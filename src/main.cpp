@@ -2,6 +2,9 @@
 #include <LiquidCrystal_I2C.h>
 #include <Servo.h>
 #include <MFRC522.h>
+#include <SoftwareSerial.h>
+#include <NewPing.h>
+
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 Servo servo1;
 Servo servo2;
@@ -28,7 +31,16 @@ const int POINTS_BLOCK = 4; // Block were the poinst will be stored in the RFID 
 MFRC522::StatusCode authenticateBlock(int blockNumber);
 MFRC522 mfrc522(SS_PIN, RST_PIN);
 MFRC522::MIFARE_Key key;
-
+//Ultrasonic and SIM800L Pins
+const int TRIGGER_PIN = 22;
+const int ECHO_PIN = 23;
+const unsigned int MAX_DISTANCE = 20;
+const int ITERATIONS = 5;
+const int SIM_RX = 24;
+const int SIM_TX = 25;
+NewPing sonar(TRIGGER_PIN, ECHO_PIN, MAX_DISTANCE);
+SoftwareSerial sim800lv2(SIM_RX, SIM_TX);
+String maintainerNum = "+639219133878";
 // Menu structure
 struct MenuItem
 {
@@ -57,7 +69,8 @@ void incrementPoints(int amout);
 void decrementPoints(int amount);
 void displayPoints(int points);
 int readPoints();
-
+void sendSMS(String message);
+void checkBinCapacity();
 // Global variables
 bool isObjectInside = false;
 int totalPoints = 0;
@@ -585,4 +598,28 @@ MFRC522::StatusCode authenticateBlock(int blockNumber)
 {
     return mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A,
                                     blockNumber, &key, &(mfrc522.uid));
+}
+
+//Functions for notifying the maintainer
+
+void sendSMS(String message){
+    sim800lv2.println("AT+CMGF=1" );
+    delay(1000);
+    sim800lv2.println("AT+CMGS=\"" + maintainerNum + "\"");
+    delay(1000);
+    sim800lv2.println(message);
+    delay(100);
+    sim800lv2.println((char)26);
+    delay(1000);
+    Serial.println("Owner has been notified!");
+}
+
+void checkBinCapacity(){
+    unsigned int duration = sonar.ping_median(ITERATIONS);
+  float distance = (duration / 2.0) * 0.0343;
+ if (distance > 0 && distance <= 5) {
+    Serial.println("Bin full! Sending SMS...");
+    sendSMS("Alert: The bottle bin is full! Please empty it.");
+    ledStatusCode(404);  // Use red LED to indicate bin is full
+ }
 }
