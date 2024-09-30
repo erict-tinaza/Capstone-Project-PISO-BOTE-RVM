@@ -51,6 +51,10 @@ const int LOADCELL_DOUT_PIN = 26;
 const int LOADCELL_SCK_PIN = 27;
 const float MAX_WEIGHT = 200.00;
 HX711 scale;
+
+//Photoresistor Module and LED
+const int LDR_PIN = A0;
+const int LED_INLET_PIN = 12;
 // Menu structure
 struct MenuItem
 {
@@ -84,6 +88,9 @@ bool isBinFull();
 void handleMaintenanceMode();
 bool isWeightAcceptable();
 
+int readLDRSensorData();
+void controlLedInletPin(bool isOn);
+bool isObjectClear();
 // Global variables
 bool isObjectInside = false;
 int totalPoints = 0;
@@ -223,23 +230,21 @@ void waitForObjectPresence()
     isObjectInside = true;
 }
 
-bool verifyObject()
-{
-    if (isObjectInside)
-    {
+bool verifyObject() {
+    if (isObjectInside) {
         delayWithMsg(3000, "Lid is closing...", "Remove hand!!!", 404);
         openCloseBinLid(1, false);
 
         unsigned long startTime = millis();
-        while (readCapacitiveSensorData() == 1)
-        {
+        while (readCapacitiveSensorData() == 1) {
             ledStatusCode(102);
             lcd.clear();
             lcd.print("Verifying....");
-            if (millis() - startTime >= 2000)
-            {
-                if (readCapacitiveSensorData() == 1 && readInductiveSensorData() == 1 && isWeightAcceptable())
-                {
+            if (millis() - startTime >= 2000) {
+                if (readCapacitiveSensorData() == 1 && 
+                    readInductiveSensorData() == 1 && 
+                    isWeightAcceptable() &&
+                    isObjectClear()) {  // Added clear object check
                     lcd.clear();
                     lcd.print("Verified!");
                     ledStatusCode(200);
@@ -248,15 +253,15 @@ bool verifyObject()
                     openCloseBinLid(2, false);
                     delay(3000);
                     return true;
-                }
-                else
-                {
+                } else {
                     lcd.clear();
                     lcd.print("Invalid");
-                    if (!isWeightAcceptable())
-                    {
+                    if (!isWeightAcceptable()) {
                         lcd.setCursor(0, 1);
                         lcd.print("Too heavy!");
+                    } else if (!isObjectClear()) {
+                        lcd.setCursor(0, 1);
+                        lcd.print("Not clear!");
                     }
                     waitToRemoveObject();
                     delayWithMsg(3000, "Lid closing", "remove hand", 404);
@@ -543,6 +548,9 @@ void setup()
     scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
     scale.set_scale(1313.03226);
     scale.tare();
+
+    pinMode(LDR_PIN, INPUT);
+    pinMode(LED_INLET_PIN, OUTPUT);
 }
 
 void loop()
@@ -757,4 +765,21 @@ void calibrateLoadCell()
     lcd.clear();
     lcd.print("Calibration done");
     delay(2000);
+}
+
+int readLDRSensorData(){
+    return analogRead(LDR_PIN);
+}
+void controlLedInlet(bool isOn){
+    digitalWrite(LED_INLET_PIN, isOn ? HIGH : LOW);
+}
+bool isObjectClear(){
+    if(isObjectInside){
+        delay(100);
+        int lightValue = readLDRSensorData();
+        delay(100);
+        controlLedInlet(false);
+        return lightValue > 200;
+    }
+    return false;
 }
