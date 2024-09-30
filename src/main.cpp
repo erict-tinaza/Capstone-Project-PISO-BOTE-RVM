@@ -4,11 +4,13 @@
 #include <MFRC522.h>
 #include <SoftwareSerial.h>
 #include <NewPing.h>
+#include <HX711.h>
+
 
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 Servo servo1;
 Servo servo2;
-
+                                            
 /*TODO: SIM800L can needs atleast 6.2v from the dc to dc converter or
  *Fix the issue by replacing the capacitor of the module by a 16V 1000 microfarads capacitor to provide enough power to the module
  *during high peak usage of the said module.
@@ -41,6 +43,14 @@ const int SIM_TX = 25;
 NewPing sonar(TRIGGER_PIN, ECHO_PIN, MAX_DISTANCE);
 SoftwareSerial sim800lv2(SIM_RX, SIM_TX);
 String maintainerNum = "+639219133878";
+
+//TODO: Finish integrating load cell sensor to the system today
+//LOADCELL SENSOR
+HX711 scale;
+const int LOADCELL_DOUT_PIN = 26;
+const int LOADCELL_SCK_PIN = 27;
+const float MAX_WEIGHT = 200.00;
+HX711 scale;
 // Menu structure
 struct MenuItem
 {
@@ -72,6 +82,8 @@ int readPoints();
 void sendSMS(String message);
 bool isBinFull();
 void handleMaintenanceMode();
+bool isWeightAcceptable();
+
 // Global variables
 bool isObjectInside = false;
 int totalPoints = 0;
@@ -226,7 +238,7 @@ bool verifyObject()
             lcd.print("Verifying....");
             if (millis() - startTime >= 2000)
             {
-                if (readCapacitiveSensorData() == 1 && readInductiveSensorData() == 1)
+                if (readCapacitiveSensorData() == 1 && readInductiveSensorData() == 1 && isWeightAcceptable())
                 {
                     lcd.clear();
                     lcd.print("Verified!");
@@ -241,6 +253,11 @@ bool verifyObject()
                 {
                     lcd.clear();
                     lcd.print("Invalid");
+                    if (!isWeightAcceptable())
+                    {
+                        lcd.setCursor(0, 1);
+                        lcd.print("Too heavy!");
+                    }
                     waitToRemoveObject();
                     delayWithMsg(3000, "Lid closing", "remove hand", 404);
                     openCloseBinLid(1, false);
@@ -522,6 +539,10 @@ void setup()
     delay(1000);
     // Test SMS functionality
     sendSMS("PISO-BOTE system initialized");
+
+    scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+    scale.set_scale(1313.03226);
+    scale.tare();
 }
 
 void loop()
@@ -702,5 +723,38 @@ void handleMaintenanceMode()
     lcd.clear();
     lcd.print("PISO-BOTE ready");
     ledStatusCode(200); 
+    delay(2000);
+}
+
+
+bool isWeightAcceptable(){
+    float weight = scale.get_units(10);
+    return weight <= MAX_WEIGHT;
+}
+
+void calibrateLoadCell()
+{
+    lcd.clear();
+    lcd.print("Calibrating...");
+    lcd.setCursor(0, 1);
+    lcd.print("Remove all weight");
+    delay(5000);
+    
+    scale.tare();
+    
+    lcd.clear();
+    lcd.print("Place known");
+    lcd.setCursor(0, 1);
+    lcd.print("weight (e.g. 100g)");
+    delay(5000);
+    
+    float knownWeight = 100.0;  // Adjust this to your actual calibration weight
+    float reading = scale.get_units(10);
+    float calibrationFactor = reading / knownWeight;
+    
+    scale.set_scale(calibrationFactor);
+    
+    lcd.clear();
+    lcd.print("Calibration done");
     delay(2000);
 }
