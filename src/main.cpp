@@ -44,13 +44,10 @@ NewPing sonar(TRIGGER_PIN, ECHO_PIN, MAX_DISTANCE);
 SoftwareSerial sim800lv2(SIM_RX, SIM_TX);
 String maintainerNum = "+639219133878";
 
-//TODO: Finish integrating load cell sensor to the system today
-//LOADCELL SENSOR
 HX711 scale;
 const int LOADCELL_DOUT_PIN = 26;
 const int LOADCELL_SCK_PIN = 27;
 const float MAX_WEIGHT = 200.00;
-HX711 scale;
 
 //Photoresistor Module and LED
 const int LDR_PIN = A0;
