@@ -5,67 +5,157 @@
 #include <SoftwareSerial.h>
 #include <NewPing.h>
 #include <HX711.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_PCD8544.h>
 
-// Constants
+//Constant Variables
 const int POINTS_BLOCK = 4;
 const int MAX_DISTANCE = 20;
 const int ITERATIONS = 5;
-const float MAX_WEIGHT = 200.00;
+const float MAX_WEIGHT = 500.00;
 
-// Pin definitions
-const int upButton = 2;
-const int downButton = 3;
-const int selectButton = 4;
-const int servoPin1 = 5;
-const int servoPin2 = 6;
-const int capacitiveSensorPin = 7;
-const int inductiveSensorPin = 8;
+//Constant Var Pin Definitions
+const int upButton = 40;
+const int downButton = 41;
+const int selectButton = 42;
+//Servo
+const int servoPin1 = 36;
+const int servoPin2 = 37;
+//Sensors
+const int capacitiveSensorPin = 39;
+const int inductiveSensorPin = 38;
+//Ultasonic Sensor 
+const int TRIGGER_PIN = 22;
+const int ECHO_PIN = 23;
+//RGB LED
 const int PIN_RED = 9;
 const int PIN_GREEN = 10;
 const int PIN_BLUE = 11;
+//RFID
 const int SS_PIN = 53;
-const int RST_PIN = 49;
-const int TRIGGER_PIN = 22;
-const int ECHO_PIN = 23;
+const int RST_PIN = 2;    
+//SIM Module
 const int SIM_RX = 24;
 const int SIM_TX = 25;
+//Load Cell
 const int LOADCELL_DOUT_PIN = 26;
 const int LOADCELL_SCK_PIN = 27;
+//LDR & LED
 const int LDR_PIN = A0;
 const int LED_INLET_PIN = 12;
+//Coin Hopper
+const int coinHopperSensor_PIN = 28;
+const int relayPin = 45;
 
-// Object instantiations
+//Nokia 5110 LCD
+const int PIN_RST = 3;   // RST (with 10kΩ resistor)
+const int PIN_CE = 4;    // CE (with 1kΩ resistor)
+const int PIN_DC = 5;    // DC (with 10kΩ resistor)
+const int PIN_DIN = 6;   // DIN (with 10kΩ resistor)
+const int PIN_CLK = 7;   // CLK (with 10kΩ resistor)
+const int PIN_BL = 13;   // Backlight with 330Ω resistor
+
+//For setting Nokia Display
+const int MIN_CONTRAST = 0;
+const int MAX_CONTRAST = 127;
+const int CONTRAST_STEP = 5;
+const int MIN_BRIGHTNESS = 0;
+const int MAX_BRIGHTNESS = 255;
+const int BRIGHTNESS_STEP = 10;
+
+// Custom icons for Nokia display
+static const unsigned char PROGMEM BOTTLE_ICON[] = {
+    0b00011000,
+    0b00111100,
+    0b00111100,
+    0b00111100,
+    0b00111100,
+    0b01111110,
+    0b01111110,
+    0b00111100
+};
+
+static const unsigned char PROGMEM COIN_ICON[] = {
+    0b00111100,
+    0b01111110,
+    0b11100111,
+    0b11000011,
+    0b11000011,
+    0b11100111,
+    0b01111110,
+    0b00111100
+};
+
+static const unsigned char PROGMEM CARD_ICON[] = {
+    0b11111111,
+    0b10000001,
+    0b10111101,
+    0b10100101,
+    0b10111101,
+    0b10000001,
+    0b11111111,
+    0b00000000
+};
+
+static const unsigned char PROGMEM ERROR_ICON[] = {
+    0b00111100,
+    0b01000010,
+    0b10100101,
+    0b10011001,
+    0b10011001,
+    0b10100101,
+    0b01000010,
+    0b00111100
+};
+static const unsigned char PROGMEM SETTINGS_ICON[] = {
+    0b00011000,
+    0b00111100,
+    0b11111111,
+    0b11100111,
+    0b11100111,
+    0b11111111,
+    0b00111100,
+    0b00011000
+};
+
+//Global Variables
+int coinCount = 0;
+bool dispensingActive = false;
+bool lastSensorState = HIGH;
+bool isObjectInside = false;
+int totalPoints = 0;
+int pointsToRedeem = 0;
+bool maintenanceMode = false;
+String maintainerNum = "+639219133878";
+
+String previousLcdLine1;
+String previousLcdLine2;
+String previousNokiaMessage;
+const bool DEBUG_SENSORS = true;  // Set to true to enable sensor debugging
+const int SENSOR_STABILIZE_TIME = 500;  // Time to wait for sensor readings to stabilize
+
+//Object instantations
+Adafruit_PCD8544 nokia(PIN_CLK, PIN_DIN, PIN_DC, PIN_CE, PIN_RST);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 Servo servo1, servo2;
 MFRC522 mfrc522(SS_PIN, RST_PIN);
 NewPing sonar(TRIGGER_PIN, ECHO_PIN, MAX_DISTANCE);
 SoftwareSerial sim800lv2(SIM_RX, SIM_TX);
 HX711 scale;
-
-// Global variables
-bool isObjectInside = false;
-int totalPoints = 0;
-int pointsToRedeem = 0;
-bool maintenanceMode = false;
-String maintainerNum = "+639219133878";
 MFRC522::MIFARE_Key key;
 
-// Menu structure
-struct MenuItem {
-    const char *name;
-    void (*action)();
-};
 
-struct Menu {
-    MenuItem *items;
-    int itemCount;
-    int currentItem;
-    const char *title;
-};
 
-// Function prototypes
+//Function Prototypes
 void depositAction();
 void redeemAction();
+int readCapacitiveSensorData();
+int readInductiveSensorData();
+void rotateServo(Servo &servo, int angle);
+void openCloseBinLid(int lidNum, bool toOpen);
+void waitToRemoveObject();
+void waitForObjectPresence();
+bool verifyObject();
 void storePointsAction();
 void insertAnotherBottleAction();
 void redeemPointsAction();
@@ -86,33 +176,481 @@ void selectMenuItem();
 void pulseColor(int redValue, int greenValue, int blueValue);
 void ledStatusCode(int errorCode);
 void delayWithMsg(unsigned long duration, String message1, String message2, int statusCode);
-int readCapacitiveSensorData();
-int readInductiveSensorData();
-void rotateServo(Servo &servo, int angle);
-void openCloseBinLid(int lidNum, bool toOpen);
-void waitToRemoveObject();
-void waitForObjectPresence();
-bool verifyObject();
+
 MFRC522::StatusCode authenticateBlock(int blockNumber);
 void calibrateLoadCell();
+void dispenseCoin(int count);
 
+void displayNokiaStatus(const String& message, const unsigned char* icon = nullptr);
+void updateMenuDisplay();
+void displayMainMenu();
+void settingsAction();
+void adjustContrastAction();
+void adjustBrightnessAction();
+void backToMainAction();
+
+// Menu structure
+struct MenuItem {
+    const char *name;
+    void (*action)();
+};
+
+struct Menu {
+    MenuItem *items;
+    int itemCount;
+    int currentItem;
+    const char *title;
+};
 // Menu definitions
 MenuItem mainMenuItems[] = {
     {"Deposit", depositAction},
-    {"Redeem", redeemAction}
+    {"Redeem", redeemAction},
+    {"Settings", settingsAction}
+};
+
+MenuItem settingsMenuItems[] = {
+    {"Contrast", adjustContrastAction},
+    {"Brightness", adjustBrightnessAction},
+    {"Back", backToMainAction}
 };
 
 MenuItem postDepositMenuItems[] = {
-    {"Insert Another", insertAnotherBottleAction},
-    {"Redeem Points", redeemPointsAction},
-    {"Store on RFID", storePointsAction}
+    {"Insert", insertAnotherBottleAction},
+    {"Redeem", redeemPointsAction},
+    {"Store", storePointsAction}
 };
 
-Menu mainMenu = {mainMenuItems, 2, 0, "Main Menu"};
+// Menu structures - KEEP THESE
+Menu mainMenu = {mainMenuItems, 3, 0, "Main Menu"};
+Menu settingsMenu = {settingsMenuItems, 3, 0, "Settings"};
 Menu postDepositMenu = {postDepositMenuItems, 3, 0, "Options"};
 Menu *currentMenu = &mainMenu;
+struct DisplayState {
+    bool nokiaDisplayActive;
+    bool lcdDisplayActive;
+    unsigned long lastUpdateTime;
+    int contrast;
+    byte backlight;
+} displayState;
 
-// Function implementations
+//Function Implementation
+void settingsAction() {
+    currentMenu = &settingsMenu;
+    updateMenuDisplay();
+}
+
+void backToMainAction() {
+    currentMenu = &mainMenu;
+    updateMenuDisplay();
+}
+
+//Functions for Settings
+void adjustContrastAction() {
+   int currentContrast = displayState.contrast;
+    if (currentContrast < MIN_CONTRAST) currentContrast = MIN_CONTRAST;
+    if (currentContrast > MAX_CONTRAST) currentContrast = MAX_CONTRAST;
+    
+    bool adjusting = true;
+    unsigned long lastButtonPress = 0;
+    
+    nokia.clearDisplay();
+    nokia.drawRect(0, 0, 84, 10, BLACK);
+    nokia.setCursor(10, 1);
+    nokia.print("Contrast");;;
+    nokia.drawLine(0, 12, 84, 12, BLACK);
+    
+    while (adjusting) {
+        if (millis() - lastButtonPress > 100) {
+            if (digitalRead(upButton) == LOW && currentContrast < MAX_CONTRAST) {
+                currentContrast += CONTRAST_STEP;
+                lastButtonPress = millis();
+            }
+            if (digitalRead(downButton) == LOW && currentContrast > MIN_CONTRAST) {
+                currentContrast -= CONTRAST_STEP;
+                lastButtonPress = millis();
+            }
+            if (digitalRead(selectButton) == LOW) {
+                adjusting = false;
+                lastButtonPress = millis();
+            }
+            
+            // Update contrast
+            nokia.setContrast(currentContrast);
+            displayState.contrast = currentContrast;
+            
+            // Update display
+            nokia.clearDisplay();
+            nokia.drawRect(0, 0, 84, 10, BLACK);
+            nokia.setCursor(10, 1);
+            nokia.print("Contrast");
+            nokia.drawLine(0, 12, 84, 12, BLACK);
+            
+            // Draw contrast bar
+            int barWidth = map(currentContrast, MIN_CONTRAST, MAX_CONTRAST, 0, 64);
+            nokia.drawRect(10, 25, 64, 8, BLACK);
+            nokia.fillRect(10, 25, barWidth, 8, BLACK);
+            
+            nokia.setCursor(10, 40);
+            nokia.print("Value: ");
+            nokia.print(currentContrast);
+            
+            nokia.display();
+            
+            // Update LCD display
+            lcd.clear();
+            lcd.print("Adjust Contrast");
+            lcd.setCursor(0, 1);
+            lcd.print("Value: ");
+            lcd.print(currentContrast);
+        }
+        delay(50);
+    }
+    
+    // Save contrast value to EEPROM here if needed
+    currentMenu = &settingsMenu;
+    updateMenuDisplay();
+}
+void adjustBrightnessAction() {
+    int currentBrightness = displayState.backlight;
+    if (currentBrightness < MIN_BRIGHTNESS) currentBrightness = MIN_BRIGHTNESS;
+    if (currentBrightness > MAX_BRIGHTNESS) currentBrightness = MAX_BRIGHTNESS;
+    
+    bool adjusting = true;
+    unsigned long lastButtonPress = 0;
+    
+    nokia.clearDisplay();
+    nokia.drawRect(0, 0, 84, 10, BLACK);
+    nokia.setCursor(8, 1);
+    nokia.print("Brightness");
+    nokia.drawLine(0, 12, 84, 12, BLACK);
+    
+    while (adjusting) {
+        if (millis() - lastButtonPress > 100) {
+            if (digitalRead(upButton) == LOW && currentBrightness < MAX_BRIGHTNESS) {
+                currentBrightness += BRIGHTNESS_STEP;
+                lastButtonPress = millis();
+            }
+            if (digitalRead(downButton) == LOW && currentBrightness > MIN_BRIGHTNESS) {
+                currentBrightness -= BRIGHTNESS_STEP;
+                lastButtonPress = millis();
+            }
+            if (digitalRead(selectButton) == LOW) {
+                adjusting = false;
+                lastButtonPress = millis();
+            }
+            
+            // Update brightness
+            analogWrite(PIN_BL, currentBrightness);
+            displayState.backlight = currentBrightness;
+            
+            // Update display
+            nokia.clearDisplay();
+            nokia.drawRect(0, 0, 84, 10, BLACK);
+            nokia.setCursor(8, 1);
+            nokia.print("Brightness");
+            nokia.drawLine(0, 12, 84, 12, BLACK);
+            
+            // Draw brightness bar
+            int barWidth = map(currentBrightness, MIN_BRIGHTNESS, MAX_BRIGHTNESS, 0, 64);
+            nokia.drawRect(10, 25, 64, 8, BLACK);
+            nokia.fillRect(10, 25, barWidth, 8, BLACK);
+            
+            nokia.setCursor(10, 40);
+            nokia.print("Value: ");
+            nokia.print(currentBrightness);
+            
+            nokia.display();
+            
+            // Update LCD display
+            lcd.clear();
+            lcd.print("Adjust Brightness");
+            lcd.setCursor(0, 1);
+            lcd.print("Value: ");
+            lcd.print(currentBrightness);
+        }
+        delay(50);
+    }
+    
+    // Save brightness value to EEPROM here if needed
+    currentMenu = &settingsMenu;
+    updateMenuDisplay();
+}
+void displayMainMenu() {
+    currentMenu = &mainMenu;
+    currentMenu->currentItem = 0;
+    
+    // Show static welcome message on LCD
+    lcd.clear();
+    lcd.print("Welcome to");
+    lcd.setCursor(0, 1);
+    lcd.print("PISO-BOTE");
+    
+    // Nokia menu display
+    nokia.clearDisplay();
+    nokia.drawRect(0, 0, 84, 10, BLACK);
+    nokia.setCursor(14, 1);
+    nokia.print("Main Menu");
+    nokia.drawLine(0, 12, 84, 12, BLACK);
+    
+    // Draw menu items with icons
+    nokia.setCursor(2, 15);
+    nokia.print("> Deposit");
+    nokia.drawBitmap(70, 13, BOTTLE_ICON, 8, 8, BLACK);
+    
+    nokia.setCursor(2, 25);
+    nokia.print("  Redeem");
+    nokia.drawBitmap(70, 23, COIN_ICON, 8, 8, BLACK);
+    
+    nokia.setCursor(2, 35);
+    nokia.print("  Settings");
+    nokia.drawBitmap(70, 33, SETTINGS_ICON, 8, 8, BLACK);
+    
+    nokia.display();
+}
+bool setupNokiaDisplay() {
+    nokia.begin();
+    nokia.setContrast(50);
+    nokia.setRotation(2);
+    nokia.clearDisplay();
+    nokia.setTextSize(1);
+    nokia.setTextColor(BLACK);
+    analogWrite(PIN_BL, HIGH);  // Use analogWrite instead of digitalWrite
+    
+    // Initialize display state
+    displayState.nokiaDisplayActive = true;
+    displayState.lcdDisplayActive = true;
+    displayState.contrast = 50;
+    displayState.backlight = 255;  // Full brightness initially
+    displayState.lastUpdateTime = 0;
+    
+    // Display startup screen
+    nokia.drawRect(0, 0, 84, 10, BLACK);
+    nokia.setCursor(14, 1);
+    nokia.println("PISO-BOTE");
+    nokia.drawLine(0, 12, 84, 12, BLACK);
+    nokia.display();
+    
+    return true;
+}
+// Replace setPower with display enabling/disabling
+void setDisplayPower(bool nokiaOn, bool lcdOn) {
+    if (nokiaOn != displayState.nokiaDisplayActive) {
+        if (nokiaOn) {
+            nokia.begin();
+            nokia.setRotation(2);  // Maintain rotation
+            nokia.setContrast(displayState.contrast);  // Maintain contrast
+            analogWrite(PIN_BL, displayState.backlight);  // Use stored backlight value
+        } else {
+            nokia.clearDisplay();
+            nokia.display();
+            analogWrite(PIN_BL, LOW);
+        }
+        displayState.nokiaDisplayActive = nokiaOn;
+    }
+    
+    if (lcdOn != displayState.lcdDisplayActive) {
+        if (lcdOn) {
+            lcd.backlight();
+        } else {
+            lcd.noBacklight();
+        }
+        displayState.lcdDisplayActive = lcdOn;
+    }
+}
+void displayNokiaStatus(const String& message, const unsigned char* icon) {
+    nokia.clearDisplay();
+    
+    if (icon != nullptr) {
+        nokia.drawBitmap(38, 8, icon, 8, 8, BLACK);
+        nokia.drawLine(0, 20, 84, 20, BLACK);
+        nokia.setCursor(0, 25);
+    } else {
+        nokia.setCursor(0, 15);
+    }
+    
+    nokia.print(message);
+    nokia.display();
+}
+// Modified updateDualDisplayStatus function
+void updateDualDisplayStatus(const String& message1, const String& message2, const unsigned char* icon = nullptr) {
+    const int LCD_WIDTH = 16;
+    String lcd1 = message1.length() > LCD_WIDTH ? message1.substring(0, LCD_WIDTH) : message1;
+    String lcd2 = message2.length() > LCD_WIDTH ? message2.substring(0, LCD_WIDTH) : message2;
+    
+    // Update LCD only if content has changed
+    if (lcd1 != previousLcdLine1 || lcd2 != previousLcdLine2) {
+        lcd.clear();
+        lcd.print(lcd1);
+        if (lcd2.length() > 0) {
+            lcd.setCursor(0, 1);
+            lcd.print(lcd2);
+        }
+        
+        previousLcdLine1 = lcd1;
+        previousLcdLine2 = lcd2;
+    }
+    
+    // Nokia display handling with word wrapping
+    const int NOKIA_LINE_WIDTH = 14; // Characters that fit on Nokia display
+    String nokiaMessage = message1 + (message2.length() > 0 ? "\n" + message2 : "");
+    
+    if (nokiaMessage != previousNokiaMessage) {
+        nokia.clearDisplay();
+        
+        if (icon != nullptr) {
+            nokia.drawBitmap(38, 8, icon, 8, 8, BLACK);
+            nokia.drawLine(0, 20, 84, 20, BLACK);
+            nokia.setCursor(0, 25);
+        } else {
+            nokia.setCursor(0, 15);
+        }
+        
+        // Word wrapping implementation
+        int currentY = icon ? 25 : 15;
+        int startPos = 0;
+        
+        // Handle message1
+        while (startPos < message1.length()) {
+            int endPos = min(startPos + NOKIA_LINE_WIDTH, (int)message1.length());
+            if (endPos < message1.length()) {
+                int lastSpace = message1.lastIndexOf(' ', endPos);
+                if (lastSpace > startPos) {
+                    endPos = lastSpace;
+                }
+            }
+            nokia.setCursor(0, currentY);
+            nokia.print(message1.substring(startPos, endPos));
+            startPos = endPos + 1;
+            currentY += 8;
+        }
+        
+        // Handle message2 if present
+        if (message2.length() > 0) {
+            currentY += 2; // Add spacing between messages
+            startPos = 0;
+            while (startPos < message2.length()) {
+                int endPos = min(startPos + NOKIA_LINE_WIDTH, (int)message2.length());
+                if (endPos < message2.length()) {
+                    int lastSpace = message2.lastIndexOf(' ', endPos);
+                    if (lastSpace > startPos) {
+                        endPos = lastSpace;
+                    }
+                }
+                nokia.setCursor(0, currentY);
+                nokia.print(message2.substring(startPos, endPos));
+                startPos = endPos + 1;
+                currentY += 8;
+            }
+        }
+        
+        nokia.display();
+        previousNokiaMessage = nokiaMessage;
+    }
+}
+void resetSystem() {
+    totalPoints = 0;
+    pointsToRedeem = 0;
+    maintenanceMode = false;
+    isObjectInside = false;
+    coinCount = 0;
+    dispensingActive = false;
+    
+    // Reset displays
+    nokia.clearDisplay();
+    nokia.display();
+    lcd.clear();
+    
+    // Reset menu state
+    currentMenu = &mainMenu;
+    currentMenu->currentItem = 0;
+    
+    // Return to normal LED status
+    ledStatusCode(200);
+}
+
+// Add this to the setup function after existing initializations
+void additionalSetup() {
+    // Reset system state
+    resetSystem();
+    
+    // Display welcome message
+    delayWithMsg(2000, "Welcome to", "PISO-BOTE", 200);
+    
+    // Show main menu
+    displayMainMenu();
+}
+void handleError(const String& message1, const String& message2) {
+    ledStatusCode(404);
+    delayWithMsg(2000, message1, message2, 404);
+    ledStatusCode(200);
+}
+void updateMenuDisplay() {
+    // Show static welcome message on LCD
+    lcd.clear();
+    lcd.print("Welcome to");
+    lcd.setCursor(0, 1);
+    lcd.print("PISO-BOTE");
+    
+    String title = currentMenu->title;
+    
+    // Nokia-specific menu layout
+    nokia.clearDisplay();
+    nokia.drawRect(0, 0, 84, 10, BLACK);
+    nokia.setCursor(14, 1);
+    nokia.print(title);
+    nokia.drawLine(0, 12, 84, 12, BLACK);
+    
+    if (currentMenu == &mainMenu) {
+        // Main menu with icons
+        nokia.setCursor(2, 15);
+        nokia.print(currentMenu->currentItem == 0 ? ">" : " ");
+        nokia.print("Deposit");
+        nokia.drawBitmap(70, 13, BOTTLE_ICON, 8, 8, BLACK);
+
+        nokia.setCursor(2, 25);
+        nokia.print(currentMenu->currentItem == 1 ? ">" : " ");
+        nokia.print("Redeem");
+        nokia.drawBitmap(70, 23, COIN_ICON, 8, 8, BLACK);
+
+        nokia.setCursor(2, 35);
+        nokia.print(currentMenu->currentItem == 2 ? ">" : " ");
+        nokia.print("Settings");
+        nokia.drawBitmap(70, 33, SETTINGS_ICON, 8, 8, BLACK);
+    } else if (currentMenu == &settingsMenu) {
+        // Settings menu with icons
+        for (size_t i = 0; i < currentMenu->itemCount; i++) {
+            nokia.setCursor(2, 15 + (i * 10));
+            nokia.print(currentMenu->currentItem == i ? ">" : " ");
+            nokia.print(currentMenu->items[i].name);
+            
+            // Add icons for settings menu items
+            if (i == 0) { // Contrast
+                nokia.drawBitmap(70, 13, SETTINGS_ICON, 8, 8, BLACK);
+            } else if (i == 1) { // Brightness
+                nokia.drawBitmap(70, 23, SETTINGS_ICON, 8, 8, BLACK);
+            }
+        }
+    } else {
+        // Post deposit menu
+        for (size_t i = 0; i < currentMenu->itemCount; i++) {
+            nokia.setCursor(2, 15 + (i * 10));
+            nokia.print(currentMenu->currentItem == i ? ">" : " ");
+            nokia.print(currentMenu->items[i].name);
+        }
+    }
+    
+    nokia.display();
+}
+
+void updateProgressDisplay(const String& message1, const String& message2, int progress) {
+    String progressBar = "[";
+    for (int i = 0; i < 10; i++) {
+        progressBar += (i < progress / 10) ? "=" : " ";
+    }
+    progressBar += "]";
+    
+    updateDualDisplayStatus(message1, message2 + " " + progressBar);
+}
 void pulseColor(int redValue, int greenValue, int blueValue) {
     for (int brightness = 0; brightness <= 255; brightness += 5) {
         analogWrite(PIN_RED, (redValue * brightness) / 255);
@@ -135,7 +673,7 @@ void ledStatusCode(int errorCode) {
             analogWrite(PIN_GREEN, 255);
             analogWrite(PIN_BLUE, 0);
             break;
-        case 201:
+   //     case 201:
         case 102: // Orange indicator = Processing
             pulseColor(255, 60, 5);
             break;
@@ -147,48 +685,157 @@ void ledStatusCode(int errorCode) {
 
 void delayWithMsg(unsigned long duration, String message1, String message2, int statusCode) {
     unsigned long startTime = millis();
-    lcd.clear();
-    lcd.print(message1);
-    lcd.setCursor(0, 1);
-    lcd.print(message2);
+    
+    // Select appropriate icon based on status code
+    const unsigned char* icon = nullptr;
+    switch (statusCode) {
+        case 200: icon = BOTTLE_ICON; break;
+        case 404: icon = ERROR_ICON; break;
+        case 102: icon = COIN_ICON; break;
+    }
+    
+    updateDualDisplayStatus(message1, message2, icon);
+    
     while (millis() - startTime < duration) {
         ledStatusCode(statusCode);
     }
 }
 
+// Modified sensor reading functions with debugging
 int readCapacitiveSensorData() {
-    delay(100);
-    return digitalRead(capacitiveSensorPin);
+    delay(50);  // Short delay for sensor stabilization
+    int reading = digitalRead(capacitiveSensorPin);
+    if (DEBUG_SENSORS) {
+        Serial.print("Capacitive Reading: ");
+        Serial.println(reading);
+    }
+    return reading;
 }
-
 int readInductiveSensorData() {
-    delay(100);
-    return digitalRead(inductiveSensorPin);
+    delay(50);  // Short delay for sensor stabilization
+    int reading = digitalRead(inductiveSensorPin);
+    if (DEBUG_SENSORS) {
+        Serial.print("Inductive Reading: ");
+        Serial.println(reading);
+    }
+    return reading;
+}
+// Add this helper function to verify sensor connections
+void testSensors() {
+    Serial.println("\n=== Testing Sensors ===");
+    Serial.println("Place and remove a plastic bottle multiple times.");
+    Serial.println("Testing for 30 seconds...");
+    
+    unsigned long startTime = millis();
+    while (millis() - startTime < 30000) {  // Test for 30 seconds
+        int capacitive = readCapacitiveSensorData();
+        int inductive = readInductiveSensorData();
+        
+        Serial.println("\nCurrent Readings:");
+        Serial.println("Capacitive: " + String(capacitive));
+        Serial.println("Inductive: " + String(inductive));
+        
+        if (capacitive == 1) {
+            Serial.println("Object Detected!");
+            if (inductive == 1) {
+                Serial.println("Likely plastic (non-metal)");
+            } else {
+                Serial.println("Likely metal");
+            }
+        } else {
+            Serial.println("No object detected");
+        }
+        
+        delay(500);  // Update every 500ms
+    }
+}
+// Add this to your setup() function
+void sensorSetup() {
+    pinMode(capacitiveSensorPin, INPUT);
+    pinMode(inductiveSensorPin, INPUT);
+    
+    Serial.println("Starting sensor test...");
+    testSensors();
+    Serial.println("Sensor test complete");
 }
 
 void rotateServo(Servo &servo, int angle) {
     servo.write(angle);
 }
 
+
 void openCloseBinLid(int lidNum, bool toOpen) {
-    int angle = toOpen ? 180 : 0;
+    int angle = toOpen ? 90 : 0;
     Servo &servo = (lidNum == 1) ? servo1 : servo2;
     rotateServo(servo, angle);
 }
 
-void waitToRemoveObject() {
+void waitToRemoveObject(){
     lcd.clear();
-    lcd.print("Remove object....");
+    lcd.print("Remove Object!");
     openCloseBinLid(1, true);
-    while (readCapacitiveSensorData() == 1 || readInductiveSensorData() == 0) {
+    while(readCapacitiveSensorData() == 1 || readInductiveSensorData() == 0){
         ledStatusCode(404);
     }
-    isObjectInside = false;
+    isObjectInside= false;
     delay(2000);
-    openCloseBinLid(1, false);
+     openCloseBinLid(1, false);
     ledStatusCode(200);
 }
 
+bool verifyObject()
+{
+    if (isObjectInside)
+    {
+        delayWithMsg(3000, "Lid is closing...", "Remove hand!!!", 404);
+        openCloseBinLid(1, false);
+
+        unsigned long startTime = millis();
+        while (readCapacitiveSensorData() == 1)
+        {
+            ledStatusCode(102);
+            lcd.clear();
+            lcd.print("Verifying....");
+            if (millis() - startTime >= 2000)
+            {
+                if (readCapacitiveSensorData() == 1 && readInductiveSensorData() == 1)
+                {
+                    lcd.clear();
+                    lcd.print("Verified!");
+                    ledStatusCode(200);
+                    openCloseBinLid(2, true);
+                    delay(3000);
+                    openCloseBinLid(2, false);
+                    //delay(3000);
+                    return true;
+                }
+                else
+                {
+                    lcd.clear();
+                    lcd.print("Invalid");
+                    waitToRemoveObject();
+                    delayWithMsg(3000, "Lid closing", "remove hand", 404);
+                    openCloseBinLid(1, false);
+                    return false;
+                }
+            }
+        }
+    }
+    return false;
+}
+void navigateMenu(int direction) {
+    currentMenu->currentItem = (currentMenu->currentItem + direction + currentMenu->itemCount) % currentMenu->itemCount;
+    updateMenuDisplay();
+    delay(200);
+    while (digitalRead(direction > 0 ? downButton : upButton) == LOW);
+}
+
+void selectMenuItem() {
+    currentMenu->items[currentMenu->currentItem].action();
+    updateMenuDisplay();
+    delay(200);
+    while (digitalRead(selectButton) == LOW);
+}
 void waitForObjectPresence() {
     unsigned long startTime = millis();
     while (readCapacitiveSensorData() == 0) {
@@ -206,82 +853,26 @@ void waitForObjectPresence() {
     Serial.println("Object detected!");
     isObjectInside = true;
 }
-
-bool verifyObject() {
-    if (!isObjectInside) return false;
-
-    delayWithMsg(3000, "Lid is closing...", "Remove hand!!!", 404);
-    openCloseBinLid(1, false);
-
-    unsigned long startTime = millis();
-    while (readCapacitiveSensorData() == 1) {
-        ledStatusCode(102);
-        lcd.clear();
-        lcd.print("Verifying....");
-        if (millis() - startTime >= 2000) {
-            if (readCapacitiveSensorData() == 1 && 
-                readInductiveSensorData() == 1 && 
-                isWeightAcceptable() &&
-                isObjectClear()) {
-                lcd.clear();
-                lcd.print("Verified!");
-                ledStatusCode(200);
-                openCloseBinLid(2, true);
-                delay(3000);
-                openCloseBinLid(2, false);
-                delay(3000);
-                return true;
-            } else {
-                lcd.clear();
-                lcd.print("Invalid");
-                lcd.setCursor(0, 1);
-                lcd.print(!isWeightAcceptable() ? "Too heavy!" : "Not clear!");
-                waitToRemoveObject();
-                delayWithMsg(3000, "Lid closing", "remove hand", 404);
-                openCloseBinLid(1, false);
-                return false;
-            }
-        }
-    }
-    return false;
-}
-
-void updateMenuDisplay() {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print(currentMenu->title);
-    lcd.setCursor(0, 1);
-    lcd.print("> ");
-    lcd.print(currentMenu->items[currentMenu->currentItem].name);
-}
-
-void navigateMenu(int direction) {
-    currentMenu->currentItem = (currentMenu->currentItem + direction + currentMenu->itemCount) % currentMenu->itemCount;
-    updateMenuDisplay();
-    delay(200);
-    while (digitalRead(direction > 0 ? downButton : upButton) == LOW);
-}
-
-void selectMenuItem() {
-    currentMenu->items[currentMenu->currentItem].action();
-    updateMenuDisplay();
-    delay(200);
-    while (digitalRead(selectButton) == LOW);
-}
-
 void depositAction() {
     if (maintenanceMode) {
+        displayNokiaStatus("System Full", ERROR_ICON);
         delayWithMsg(2000, "PISO-BOTE is full", "Try again later", 404);
         return;
     }
+    
+    displayNokiaStatus("Ready for Bottle", BOTTLE_ICON);
     lcd.clear();
     lcd.print("Opening bin....");
     openCloseBinLid(1, true);
+    
+    displayNokiaStatus("Insert Bottle", BOTTLE_ICON);
     lcd.clear();
     lcd.print("Insert Bottle!");
+    
     waitForObjectPresence();
     if (verifyObject()) {
         totalPoints++;
+        displayNokiaStatus("Success!", BOTTLE_ICON);
         lcd.clear();
         lcd.print("Deposit success!");
         lcd.setCursor(0, 1);
@@ -292,41 +883,19 @@ void depositAction() {
         updateMenuDisplay();
     }
 }
-
 void insertAnotherBottleAction() {
     depositAction();
 }
 
-void storePointsAction() {
-    lcd.clear();
-    lcd.print("Present RFID Card");
-    unsigned long startTime = millis();
-    while (millis() - startTime < 10000) {
-        if (detectCard()) {
-            if (writePoints(totalPoints)) {
-                delayWithMsg(2000, "Points stored!", "Total: " + String(totalPoints), 200);
-            } else {
-                delayWithMsg(2000, "Failed to store", "points. Try again.", 404);
-            }
-            mfrc522.PICC_HaltA();
-            mfrc522.PCD_StopCrypto1();
-            currentMenu = &mainMenu;
-            updateMenuDisplay();
-            totalPoints = 0;
-            return;
-        }
-        delay(100);
-    }
-    delayWithMsg(2000, "No card detected", "", 404);
-    currentMenu = &mainMenu;
-    updateMenuDisplay();
-}
-
+//RFID Functions
 void redeemAction() {
     if (maintenanceMode) {
+        displayNokiaStatus("System Full", ERROR_ICON);
         delayWithMsg(2000, "PISO-BOTE is full", "Try again later", 404);
         return;
     }
+    
+    displayNokiaStatus("Present Card", CARD_ICON);
     lcd.clear();
     lcd.print("Present RFID card");
 
@@ -345,6 +914,7 @@ void redeemAction() {
         }
         delay(100);
     }
+    displayNokiaStatus("No Card Found", ERROR_ICON);
     delayWithMsg(2000, "No card detected", "", 404);
 }
 
@@ -387,6 +957,8 @@ void redeemPointsAction() {
             } else {
                 totalPoints -= pointsToRedeem;
                 if (writePoints(totalPoints)) {
+                    delayWithMsg(2000, "Redeeming: " + String(pointsToRedeem), "Please wait...", 200);
+                    dispenseCoin(pointsToRedeem);  // Dispense coins equal to pointsToRedeem
                     delayWithMsg(2000, "Redeemed: " + String(pointsToRedeem), "Remaining: " + String(totalPoints), 200);
                 } else {
                     delayWithMsg(2000, "Failed to update", "card. Try again.", 404);
@@ -457,6 +1029,118 @@ MFRC522::StatusCode authenticateBlock(int blockNumber) {
     return mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A,
                                     blockNumber, &key, &(mfrc522.uid));
 }
+void storePointsAction() {
+    lcd.clear();
+    lcd.print("Present RFID Card");
+    unsigned long startTime = millis();
+    while (millis() - startTime < 10000) {
+        if (detectCard()) {
+            if (writePoints(totalPoints)) {
+                delayWithMsg(2000, "Points stored!", "Total: " + String(totalPoints), 200);
+            } else {
+                delayWithMsg(2000, "Failed to store", "points. Try again.", 404);
+            }
+            mfrc522.PICC_HaltA();
+            mfrc522.PCD_StopCrypto1();
+            currentMenu = &mainMenu;
+            updateMenuDisplay();
+            totalPoints = 0;
+            return;
+        }
+        delay(100);
+    }
+    delayWithMsg(2000, "No card detected", "", 404);
+    currentMenu = &mainMenu;
+    updateMenuDisplay();
+}
+
+
+void setup() {
+   if (!setupNokiaDisplay()) {
+        // Handle Nokia display initialization failure
+        Serial.println(F("Nokia display initialization failed. System halted."));
+        while (1) { delay(1000); } // Safety halt
+    }
+    
+    lcd.init();
+    lcd.backlight();
+    lcd.clear();
+    
+    pinMode(upButton, INPUT_PULLUP);
+    pinMode(downButton, INPUT_PULLUP);
+    pinMode(selectButton, INPUT_PULLUP);
+    pinMode(capacitiveSensorPin, INPUT);
+    pinMode(inductiveSensorPin, INPUT);
+    pinMode(PIN_RED, OUTPUT);
+    pinMode(PIN_GREEN, OUTPUT);
+    pinMode(PIN_BLUE, OUTPUT);
+    pinMode(LDR_PIN, INPUT);
+    pinMode(LED_INLET_PIN, OUTPUT);
+
+    ledStatusCode(200);
+
+    servo1.attach(servoPin1);
+    servo2.attach(servoPin2);
+    openCloseBinLid(1, false);
+    openCloseBinLid(2, false);
+
+    updateMenuDisplay();
+    Serial.begin(9600);
+    setUpRFID();
+    sim800lv2.begin(9600);
+    delay(1000);
+    
+    sendSMS("PISO-BOTE system initialized");
+
+    scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+    scale.set_scale(-349.994118);
+    scale.tare();
+     pinMode(coinHopperSensor_PIN, INPUT_PULLUP);  // Use internal pull-up resistor
+    pinMode(relayPin, OUTPUT);
+    digitalWrite(relayPin, LOW); 
+     pinMode(PIN_BL, OUTPUT);
+    analogWrite(PIN_BL, 255); 
+
+    Serial.println("Testing servos...");
+    
+    Serial.println("Testing servo 1");
+    openCloseBinLid(1, true);
+    delay(1000);
+    openCloseBinLid(1, false);
+    
+    Serial.println("Testing servo 2");
+    openCloseBinLid(2, true);
+    delay(1000);
+    openCloseBinLid(2, false);
+    
+    Serial.println("Servo test complete");
+}
+
+void loop() {
+    if (maintenanceMode) {
+        handleMaintenanceMode();
+        return;
+    }
+    
+    if (isBinFull()) {
+        maintenanceMode = true;
+        displayNokiaStatus("System Full", ERROR_ICON);
+        return;
+    }
+    
+    if (digitalRead(downButton) == LOW) {
+        navigateMenu(1);
+    }
+    if (digitalRead(upButton) == LOW) {
+        navigateMenu(-1);
+    }
+    if (digitalRead(selectButton) == LOW) {
+        selectMenuItem();
+    }
+    
+    delay(100);
+}
+
 
 void sendSMS(String message) {
     sim800lv2.println("AT+CMGF=1");
@@ -501,7 +1185,8 @@ void handleMaintenanceMode() {
 
 bool isWeightAcceptable() {
     float weight = scale.get_units(10);
-    return weight <= MAX_WEIGHT;
+    return true; //weight <= MAX_WEIGHT;
+     //TODO: change to tjje commented code
 }
 
 void calibrateLoadCell() {
@@ -546,65 +1231,62 @@ bool isObjectClear() {
         controlLedInlet(false);
         return lightValue > 200;
     }
-    return false;
+    return true;
+    //TODO: change to false
 }
-
-void setup() {
-    lcd.init();
-    lcd.backlight();
+void dispenseCoin(int count) {
+    coinCount = 0;
+    dispensingActive = true;
+    digitalWrite(relayPin, HIGH);  
+    
     lcd.clear();
-    
-    pinMode(upButton, INPUT_PULLUP);
-    pinMode(downButton, INPUT_PULLUP);
-    pinMode(selectButton, INPUT_PULLUP);
-    pinMode(capacitiveSensorPin, INPUT);
-    pinMode(inductiveSensorPin, INPUT);
-    pinMode(PIN_RED, OUTPUT);
-    pinMode(PIN_GREEN, OUTPUT);
-    pinMode(PIN_BLUE, OUTPUT);
-    pinMode(LDR_PIN, INPUT);
-    pinMode(LED_INLET_PIN, OUTPUT);
+    lcd.print("Dispensing coins");
+    lcd.setCursor(0, 1);
+    lcd.print("Count: 0");
 
-    ledStatusCode(200);
+    unsigned long startTime = millis();  
 
-    servo1.attach(servoPin1);
-    servo2.attach(servoPin2);
-    openCloseBinLid(1, false);
-    openCloseBinLid(2, false);
+    while (dispensingActive) {
+     
+        if (millis() - startTime > 60000) {
+            lcd.clear();
+            lcd.print("Dispensing error");
+            lcd.setCursor(0, 1);
+            lcd.print("Please contact staff");
+            delay(3000);
+            break;  
+        }
 
-    updateMenuDisplay();
-    Serial.begin(9600);
-    setUpRFID();
-    sim800lv2.begin(9600);
-    delay(1000);
-    
-    sendSMS("PISO-BOTE system initialized");
+        bool currentSensorState = digitalRead(coinHopperSensor_PIN);
 
-    scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
-    scale.set_scale(1313.03226);
-    scale.tare();
-}
+        
+        if (currentSensorState == LOW && lastSensorState == HIGH) {
+            coinCount++;
+            lcd.setCursor(7, 1);
+            lcd.print(coinCount);
+            Serial.print("Coin dispensed! Count: ");
+            Serial.println(coinCount);
 
-void loop() {
-    if (maintenanceMode) {
-        handleMaintenanceMode();
-        return;
+            if (coinCount >= count) {
+                digitalWrite(relayPin, LOW);  
+                dispensingActive = false;
+            }
+        }
+
+        lastSensorState = currentSensorState;
+        delay(10);  
     }
-    
-    if (isBinFull()) {
-        maintenanceMode = true;
-        return;
+
+    digitalWrite(relayPin, LOW);  
+
+    if (coinCount == count) {
+        lcd.clear();
+        lcd.print("Dispensing done");
+    } else {
+        lcd.clear();
+        lcd.print("Incomplete dispense");
+        lcd.setCursor(0, 1);
+        lcd.print("Coins: " + String(coinCount) + "/" + String(count));
     }
-    
-    if (digitalRead(downButton) == LOW) {
-        navigateMenu(1);
-    }
-    if (digitalRead(upButton) == LOW) {
-        navigateMenu(-1);
-    }
-    if (digitalRead(selectButton) == LOW) {
-        selectMenuItem();
-    }
-    
-    delay(100);
+    delay(2000);
 }
