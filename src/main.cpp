@@ -22,8 +22,24 @@ const int selectButton = 42;
 const int servoPin1 = 36;
 const int servoPin2 = 37;
 //Sensors
-const int capacitiveSensorPin = 39;
-const int inductiveSensorPin = 38;
+
+// Capacitive sensor configuration for analog reading
+const int CAPACITIVE_SENSOR_PIN = A0;  // Analog pin for capacitive sensor
+const int DETECTION_THRESHOLD = 700;    // Threshold for bottle detection (adjust if needed)
+const int NO_BOTTLE_THRESHOLD = 500;    // Threshold for confirming bottle removal
+const int HYSTERESIS = 50;             // Prevent flickering
+const int SAMPLE_COUNT = 5;            // Number of readings to average
+const int DEBOUNCE_MS = 50;            // Minimum time between readings
+const int inductiveSensorPin = 15;
+
+// Global state for the capacitive sensor
+struct CapacitiveSensorState 
+    bool isDetecting;
+    unsigned long lastReadTime;
+    int lastStableValue;
+    
+    CapacitiveSensorState() : isDetecting(false), lastReadTime(0), lastStableValue(0) {}
+} capacitiveSensor;
 //Ultasonic Sensor 
 const int TRIGGER_PIN = 22;
 const int ECHO_PIN = 23;
@@ -41,7 +57,7 @@ const int SIM_TX = 25;
 const int LOADCELL_DOUT_PIN = 26;
 const int LOADCELL_SCK_PIN = 27;
 //LDR & LED
-const int LDR_PIN = A0;
+const int LDR_PIN = A1;
 const int LED_INLET_PIN = 12;
 //Coin Hopper
 const int coinHopperSensor_PIN = 28;
@@ -149,7 +165,7 @@ MFRC522::MIFARE_Key key;
 //Function Prototypes
 void depositAction();
 void redeemAction();
-int readCapacitiveSensorData();
+bool readCapacitiveSensorData();
 int readInductiveSensorData();
 void rotateServo(Servo &servo, int angle);
 void openCloseBinLid(int lidNum, bool toOpen);
@@ -188,7 +204,7 @@ void settingsAction();
 void adjustContrastAction();
 void adjustBrightnessAction();
 void backToMainAction();
-
+void debugSensorReadings();
 // Menu structure
 struct MenuItem {
     const char *name;
@@ -700,16 +716,55 @@ void delayWithMsg(unsigned long duration, String message1, String message2, int 
         ledStatusCode(statusCode);
     }
 }
+int getCapacitiveSensorValue() {
+    long sum = 0;
+    
+    // Take multiple samples to reduce noise
+    for (int i = 0; i < SAMPLE_COUNT; i++) {
+        sum += analogRead(CAPACITIVE_SENSOR_PIN);
+        delay(2);  // Short delay between readings for stability
+    }
+    
+    int averageValue = sum / SAMPLE_COUNT;
+    
+    if (DEBUG_SENSORS) {
+        Serial.print("Raw Capacitive Value: ");
+        Serial.println(averageValue);
+    }
+    
+    return averageValue;
+}
 
 // Modified sensor reading functions with debugging
-int readCapacitiveSensorData() {
-    delay(50);  // Short delay for sensor stabilization
-    int reading = digitalRead(capacitiveSensorPin);
-    if (DEBUG_SENSORS) {
-        Serial.print("Capacitive Reading: ");
-        Serial.println(reading);
+// Check if bottle is detected with debouncing and hysteresis
+bool readCapacitiveSensorData() {
+    // Debounce check
+    if (millis() - capacitiveSensor.lastReadTime < DEBOUNCE_MS) {
+        return capacitiveSensor.isDetecting;
     }
-    return reading;
+
+    capacitiveSensor.lastReadTime = millis();
+    int currentValue = getCapacitiveSensorValue();
+    
+    // Update detection state with hysteresis to prevent flickering
+    if (currentValue >= DETECTION_THRESHOLD) {
+        capacitiveSensor.isDetecting = true;
+        capacitiveSensor.lastStableValue = currentValue;
+    } 
+    else if (currentValue < NO_BOTTLE_THRESHOLD) {
+        capacitiveSensor.isDetecting = false;
+        capacitiveSensor.lastStableValue = currentValue;
+    }
+    // If value is between thresholds, maintain previous state (hysteresis)
+
+    if (DEBUG_SENSORS) {
+        Serial.print("Capacitive Value: ");
+        Serial.print(currentValue);
+        Serial.print(" | State: ");
+        Serial.println(capacitiveSensor.isDetecting ? "BOTTLE DETECTED" : "NO BOTTLE");
+    }
+
+    return capacitiveSensor.isDetecting;
 }
 int readInductiveSensorData() {
     delay(50);  // Short delay for sensor stabilization
@@ -720,43 +775,65 @@ int readInductiveSensorData() {
     }
     return reading;
 }
-// Add this helper function to verify sensor connections
-void testSensors() {
-    Serial.println("\n=== Testing Sensors ===");
-    Serial.println("Place and remove a plastic bottle multiple times.");
+bool isBottleFullyRemoved() {
+    int currentValue = getCapacitiveSensorValue();
+    return currentValue < NO_BOTTLE_THRESHOLD;
+}
+
+void testCapacitiveSensor() {
+    Serial.println("\n=== Testing Analog Capacitive Sensor ===");
+    Serial.println("Place and remove a plastic bottle multiple times");
+    Serial.println("Detection Threshold: " + String(DETECTION_THRESHOLD));
+    Serial.println("No Bottle Threshold: " + String(NO_BOTTLE_THRESHOLD));
     Serial.println("Testing for 30 seconds...");
     
     unsigned long startTime = millis();
-    while (millis() - startTime < 30000) {  // Test for 30 seconds
-        int capacitive = readCapacitiveSensorData();
-        int inductive = readInductiveSensorData();
+    int sampleCount = 0;
+    int maxReading = 0;
+    int minReading = 1023;
+    
+    while (millis() - startTime < 30000) {
+        int rawValue = getCapacitiveSensorValue();
+        bool isDetecting = readCapacitiveSensorData();
         
-        Serial.println("\nCurrent Readings:");
-        Serial.println("Capacitive: " + String(capacitive));
-        Serial.println("Inductive: " + String(inductive));
+        // Update min/max values
+        maxReading = max(maxReading, rawValue);
+        minReading = min(minReading, rawValue);
         
-        if (capacitive == 1) {
-            Serial.println("Object Detected!");
-            if (inductive == 1) {
-                Serial.println("Likely plastic (non-metal)");
-            } else {
-                Serial.println("Likely metal");
-            }
-        } else {
-            Serial.println("No object detected");
-        }
+        Serial.println("\nReading #" + String(++sampleCount));
+        Serial.println("Raw Value: " + String(rawValue));
+        Serial.println("Status: " + String(isDetecting ? "BOTTLE DETECTED" : "NO BOTTLE"));
         
-        delay(500);  // Update every 500ms
+        delay(1000);  // Update every second
+    }
+    
+    Serial.println("\n=== Test Results ===");
+    Serial.println("Samples Taken: " + String(sampleCount));
+    Serial.println("Minimum Reading: " + String(minReading));
+    Serial.println("Maximum Reading: " + String(maxReading));
+    Serial.println("Current Thresholds:");
+    Serial.println("- Detection: " + String(DETECTION_THRESHOLD));
+    Serial.println("- No Bottle: " + String(NO_BOTTLE_THRESHOLD));
+}
+void setupCapacitiveSensor() {
+    pinMode(CAPACITIVE_SENSOR_PIN, INPUT);
+    capacitiveSensor.isDetecting = false;
+    capacitiveSensor.lastReadTime = 0;
+    capacitiveSensor.lastStableValue = 0;
+    
+    if (DEBUG_SENSORS) {
+        testCapacitiveSensor();
     }
 }
+
 // Add this to your setup() function
 void sensorSetup() {
-    pinMode(capacitiveSensorPin, INPUT);
+   // pinMode(capacitiveSensorPin, INPUT);
     pinMode(inductiveSensorPin, INPUT);
     
-    Serial.println("Starting sensor test...");
-    testSensors();
-    Serial.println("Sensor test complete");
+    // Serial.println("Starting sensor test...");
+    // testSensors();
+    // Serial.println("Sensor test complete");
 }
 
 void rotateServo(Servo &servo, int angle) {
@@ -769,48 +846,49 @@ void openCloseBinLid(int lidNum, bool toOpen) {
     Servo &servo = (lidNum == 1) ? servo1 : servo2;
     rotateServo(servo, angle);
 }
-
-void waitToRemoveObject(){
+void waitToRemoveObject() {
     lcd.clear();
-    lcd.print("Remove Object!");
+    lcd.print("Remove Bottle!");
     openCloseBinLid(1, true);
-    while(readCapacitiveSensorData() == 1 || readInductiveSensorData() == 0){
+    
+    unsigned long startTime = millis();
+    while (!isBottleFullyRemoved()) {
         ledStatusCode(404);
+        
+        // Timeout after 10 seconds
+        if (millis() - startTime > 10000) {
+            lcd.clear();
+            lcd.print("Timeout!");
+            break;
+        }
+        delay(100);
     }
-    isObjectInside= false;
+    
+    isObjectInside = false;
     delay(2000);
-     openCloseBinLid(1, false);
+    openCloseBinLid(1, false);
     ledStatusCode(200);
 }
-
-bool verifyObject()
-{
-    if (isObjectInside)
-    {
+bool verifyObject() {
+    if (isObjectInside) {
         delayWithMsg(3000, "Lid is closing...", "Remove hand!!!", 404);
         openCloseBinLid(1, false);
 
         unsigned long startTime = millis();
-        while (readCapacitiveSensorData() == 1)
-        {
+        while (!readCapacitiveSensorData()) { // Changed condition
             ledStatusCode(102);
             lcd.clear();
             lcd.print("Verifying....");
-            if (millis() - startTime >= 2000)
-            {
-                if (readCapacitiveSensorData() == 1 && readInductiveSensorData() == 1)
-                {
+            if (millis() - startTime >= 2000) {
+                if (readCapacitiveSensorData() && readInductiveSensorData() == HIGH) {
                     lcd.clear();
                     lcd.print("Verified!");
                     ledStatusCode(200);
                     openCloseBinLid(2, true);
                     delay(3000);
                     openCloseBinLid(2, false);
-                    //delay(3000);
                     return true;
-                }
-                else
-                {
+                } else {
                     lcd.clear();
                     lcd.print("Invalid");
                     waitToRemoveObject();
@@ -836,13 +914,26 @@ void selectMenuItem() {
     delay(200);
     while (digitalRead(selectButton) == LOW);
 }
+// Example of how to use in waitForObjectPresence
 void waitForObjectPresence() {
     unsigned long startTime = millis();
-    while (readCapacitiveSensorData() == 0) {
+    bool objectDetected = false;
+    
+    while (!objectDetected) {
         ledStatusCode(102);
+        
+        if (readCapacitiveSensorData()) {
+            // Additional confirmation check to avoid false positives
+            delay(100);  // Short delay for stability
+            if (readCapacitiveSensorData()) {  // Double-check the reading
+                objectDetected = true;
+                break;
+            }
+        }
+        
         if (millis() - startTime >= 3000) {
             ledStatusCode(404);
-            delayWithMsg(2000, "No object", "detected!", 404);
+            delayWithMsg(2000, "No bottle", "detected!", 404);
             delayWithMsg(2000, "Lid closing", "remove hand", 404);
             openCloseBinLid(1, false);
             ledStatusCode(200);
@@ -850,9 +941,11 @@ void waitForObjectPresence() {
             return;
         }
     }
-    Serial.println("Object detected!");
+    
+    Serial.println("Bottle detected!");
     isObjectInside = true;
 }
+
 void depositAction() {
     if (maintenanceMode) {
         displayNokiaStatus("System Full", ERROR_ICON);
@@ -1069,13 +1162,14 @@ void setup() {
     pinMode(upButton, INPUT_PULLUP);
     pinMode(downButton, INPUT_PULLUP);
     pinMode(selectButton, INPUT_PULLUP);
-    pinMode(capacitiveSensorPin, INPUT);
+    pinMode(CAPACITIVE_SENSOR_PIN, INPUT);
     pinMode(inductiveSensorPin, INPUT);
     pinMode(PIN_RED, OUTPUT);
     pinMode(PIN_GREEN, OUTPUT);
     pinMode(PIN_BLUE, OUTPUT);
     pinMode(LDR_PIN, INPUT);
     pinMode(LED_INLET_PIN, OUTPUT);
+    setupCapacitiveSensor(); 
 
     ledStatusCode(200);
 
@@ -1114,6 +1208,10 @@ void setup() {
     openCloseBinLid(2, false);
     
     Serial.println("Servo test complete");
+    Serial.print("Capactive: ");
+    Serial.println(readCapacitiveSensorData());
+
+    
 }
 
 void loop() {
@@ -1137,7 +1235,7 @@ void loop() {
     if (digitalRead(selectButton) == LOW) {
         selectMenuItem();
     }
-    
+      Serial.println(readCapacitiveSensorData());
     delay(100);
 }
 
@@ -1289,4 +1387,25 @@ void dispenseCoin(int count) {
         lcd.print("Coins: " + String(coinCount) + "/" + String(count));
     }
     delay(2000);
+}
+
+void debugSensorReadings() {
+    if (DEBUG_SENSORS) {
+        Serial.println("\n=== Sensor Readings ===");
+        
+        // Capacitive sensor
+        int capValue = getCapacitiveSensorValue();
+        bool isDetecting = readCapacitiveSensorData();
+        Serial.print("Capacitive Raw Value: ");
+        Serial.print(capValue);
+        Serial.print(" | Detecting: ");
+        Serial.println(isDetecting ? "YES" : "NO");
+        
+        // Inductive sensor
+        int indValue = readInductiveSensorData();
+        Serial.print("Inductive Value: ");
+        Serial.println(indValue == HIGH ? "HIGH" : "LOW");
+        
+        Serial.println("====================\n");
+    }
 }
