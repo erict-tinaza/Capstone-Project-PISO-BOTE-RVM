@@ -25,7 +25,7 @@ const int servoPin2 = 37;
 
 // Capacitive sensor configuration for analog reading
 const int CAPACITIVE_SENSOR_PIN = A0;  // Analog pin for capacitive sensor
-const int DETECTION_THRESHOLD = 700;    // Threshold for bottle detection (adjust if needed)
+const int DETECTION_THRESHOLD = 800;    // Threshold for bottle detection (adjust if needed)
 const int NO_BOTTLE_THRESHOLD = 500;    // Threshold for confirming bottle removal
 const int HYSTERESIS = 50;             // Prevent flickering
 const int SAMPLE_COUNT = 5;            // Number of readings to average
@@ -33,13 +33,20 @@ const int DEBOUNCE_MS = 50;            // Minimum time between readings
 const int inductiveSensorPin = 15;
 
 // Global state for the capacitive sensor
-struct CapacitiveSensorState 
+
+struct CapacitiveSensorState {
     bool isDetecting;
     unsigned long lastReadTime;
     int lastStableValue;
     
-    CapacitiveSensorState() : isDetecting(false), lastReadTime(0), lastStableValue(0) {}
-} capacitiveSensor;
+    // Constructor
+    CapacitiveSensorState() {
+        isDetecting = false;
+        lastReadTime = 0;
+        lastStableValue = 0;
+    }
+};
+CapacitiveSensorState capacitiveSensor;
 //Ultasonic Sensor 
 const int TRIGGER_PIN = 22;
 const int ECHO_PIN = 23;
@@ -755,8 +762,7 @@ bool readCapacitiveSensorData() {
         capacitiveSensor.isDetecting = false;
         capacitiveSensor.lastStableValue = currentValue;
     }
-    // If value is between thresholds, maintain previous state (hysteresis)
-
+    
     if (DEBUG_SENSORS) {
         Serial.print("Capacitive Value: ");
         Serial.print(currentValue);
@@ -817,15 +823,12 @@ void testCapacitiveSensor() {
 }
 void setupCapacitiveSensor() {
     pinMode(CAPACITIVE_SENSOR_PIN, INPUT);
-    capacitiveSensor.isDetecting = false;
-    capacitiveSensor.lastReadTime = 0;
-    capacitiveSensor.lastStableValue = 0;
+    capacitiveSensor = CapacitiveSensorState(); // Initialize using constructor
     
     if (DEBUG_SENSORS) {
         testCapacitiveSensor();
     }
 }
-
 // Add this to your setup() function
 void sensorSetup() {
    // pinMode(capacitiveSensorPin, INPUT);
@@ -870,36 +873,80 @@ void waitToRemoveObject() {
     ledStatusCode(200);
 }
 bool verifyObject() {
-    if (isObjectInside) {
-        delayWithMsg(3000, "Lid is closing...", "Remove hand!!!", 404);
-        openCloseBinLid(1, false);
-
-        unsigned long startTime = millis();
-        while (!readCapacitiveSensorData()) { // Changed condition
-            ledStatusCode(102);
-            lcd.clear();
-            lcd.print("Verifying....");
-            if (millis() - startTime >= 2000) {
-                if (readCapacitiveSensorData() && readInductiveSensorData() == HIGH) {
-                    lcd.clear();
-                    lcd.print("Verified!");
-                    ledStatusCode(200);
-                    openCloseBinLid(2, true);
-                    delay(3000);
-                    openCloseBinLid(2, false);
-                    return true;
-                } else {
-                    lcd.clear();
-                    lcd.print("Invalid");
-                    waitToRemoveObject();
-                    delayWithMsg(3000, "Lid closing", "remove hand", 404);
-                    openCloseBinLid(1, false);
-                    return false;
-                }
-            }
-        }
+    if (!isObjectInside) {
+        return false;
     }
-    return false;
+
+    // First notify user and close lid
+    delayWithMsg(3000, "Lid is closing...", "Remove hand!!!", 404);
+    openCloseBinLid(1, false);
+    delay(1000);  // Give time for lid to close and readings to stabilize
+
+    unsigned long startTime = millis();
+    bool verificationComplete = false;
+    bool verificationResult = false;
+
+    // Main verification loop
+    while (!verificationComplete && (millis() - startTime < 3000)) {  // 5 second timeout
+        ledStatusCode(102);
+        lcd.clear();
+        lcd.print("Verifying....");
+        
+        // Get sensor readings
+        bool capacitiveReading = readCapacitiveSensorData();
+        int inductiveReading = readInductiveSensorData();
+        
+        // Debug output
+        if (DEBUG_SENSORS) {
+            Serial.println("Verification in progress:");
+            Serial.println("Capacitive: " + String(capacitiveReading));
+            Serial.println("Inductive: " + String(inductiveReading));
+        }
+
+        // Check if both sensors detect correctly
+        if (getCapacitiveSensorValue() >= DETECTION_THRESHOLD) {
+            lcd.clear();
+            lcd.print("Verified!");
+            ledStatusCode(200);
+            
+            // Open second lid to drop bottle
+            openCloseBinLid(2, true);
+            delay(3000);
+            openCloseBinLid(2, false);
+            
+            verificationResult = true;
+            verificationComplete = true;
+        } 
+        // If we've waited at least 2 seconds and verification failed
+        else if (millis() - startTime >= 2000) {
+            lcd.clear();
+            lcd.print("Invalid object");
+            ledStatusCode(404);
+            
+            // Handle invalid object
+            waitToRemoveObject();
+            delayWithMsg(3000, "Lid closing", "remove hand", 404);
+            openCloseBinLid(1, false);
+            
+            verificationResult = false;
+            verificationComplete = true;
+        }
+        
+        delay(100);  // Small delay to prevent tight loop
+    }
+
+    // Handle timeout case
+    if (!verificationComplete) {
+        lcd.clear();
+        lcd.print("Verification");
+        lcd.setCursor(0, 1);
+        lcd.print("timeout!");
+        ledStatusCode(404);
+        waitToRemoveObject();
+        return false;
+    }
+
+    return verificationResult;
 }
 void navigateMenu(int direction) {
     currentMenu->currentItem = (currentMenu->currentItem + direction + currentMenu->itemCount) % currentMenu->itemCount;
