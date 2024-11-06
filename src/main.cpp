@@ -150,6 +150,9 @@ int totalPoints = 0;
 int pointsToRedeem = 0;
 bool maintenanceMode = false;
 String maintainerNum = "+639219133878";
+const int MAX_RFID_INIT_ATTEMPTS = 3;
+const int RFID_RESET_DELAY = 50;
+
 
 String previousLcdLine1;
 String previousLcdLine2;
@@ -212,6 +215,7 @@ void adjustContrastAction();
 void adjustBrightnessAction();
 void backToMainAction();
 void debugSensorReadings();
+void  testRFIDCommunication();
 // Menu structure
 struct MenuItem {
     const char *name;
@@ -257,6 +261,86 @@ struct DisplayState {
 } displayState;
 
 //Function Implementation
+bool initializeRFID() {
+    // Power cycle the RFID module by toggling RST pin
+    digitalWrite(RST_PIN, LOW);
+    delay(RFID_RESET_DELAY);
+    digitalWrite(RST_PIN, HIGH);
+    delay(RFID_RESET_DELAY);
+
+    int attempts = 0;
+    bool initialized = false;
+
+    while (!initialized && attempts < MAX_RFID_INIT_ATTEMPTS) {
+        SPI.begin();
+        delay(50);  // Give SPI time to stabilize
+        
+        mfrc522.PCD_Init();
+        delay(100);  // Give the module time to complete initialization
+        
+        // Test if initialization was successful by reading version
+        byte version = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
+        
+        if (version == 0x91 || version == 0x92) {  // Known good versions
+            initialized = true;
+            
+            // Set antenna gain to maximum
+            mfrc522.PCD_SetAntennaGain(mfrc522.RxGain_max);
+            
+            // Initialize the key
+            for (byte i = 0; i < 6; i++) {
+                key.keyByte[i] = 0xFF;
+            }
+            
+            Serial.println(F("RFID initialized successfully"));
+            Serial.print(F("Version: 0x"));
+            Serial.println(version, HEX);
+        } else {
+            attempts++;
+            Serial.print(F("RFID init attempt "));
+            Serial.print(attempts);
+            Serial.println(F(" failed"));
+            delay(500);  // Wait before retry
+        }
+    }
+
+    return initialized;
+}
+void setupRFIDSystem() {
+    pinMode(RST_PIN, OUTPUT);
+    
+    if (!initializeRFID()) {
+        // Handle initialization failure
+        Serial.println(F("RFID initialization failed!"));
+        // Maybe add an error LED indication or display message
+        lcd.clear();
+        lcd.print(F("RFID Init Failed"));
+        // You might want to retry or halt the system
+        return;
+    }
+
+    // Test RFID communication
+    testRFIDCommunication();
+}
+
+// Add this function to verify RFID is working
+void testRFIDCommunication() {
+    byte bufferATQA[2];
+    byte bufferSize = sizeof(bufferATQA);
+
+    // Check if the antenna is working by trying to detect a card
+    mfrc522.PCD_AntennaOn();
+    delay(100);  // Give the antenna time to power up
+    
+    bool antennaOk = mfrc522.PCD_GetAntennaGain() > 0;
+    if (!antennaOk) {
+        Serial.println(F("RFID antenna error!"));
+        return;
+    }
+
+    Serial.println(F("RFID system ready"));
+}
+
 void settingsAction() {
     currentMenu = &settingsMenu;
     updateMenuDisplay();
@@ -610,9 +694,9 @@ void handleError(const String& message1, const String& message2) {
 void updateMenuDisplay() {
     // Show static welcome message on LCD
     lcd.clear();
-    lcd.print("Welcome to");
+    lcd.print(F("Welcome to"));
     lcd.setCursor(0, 1);
-    lcd.print("PISO-BOTE");
+    lcd.print(F("PISO-BOTE"));
     
     String title = currentMenu->title;
     
@@ -734,10 +818,10 @@ int getCapacitiveSensorValue() {
     
     int averageValue = sum / SAMPLE_COUNT;
     
-    if (DEBUG_SENSORS) {
-        Serial.print("Raw Capacitive Value: ");
-        Serial.println(averageValue);
-    }
+    // if (DEBUG_SENSORS) {
+    //     Serial.print("Raw Capacitive Value: ");
+    //     Serial.println(averageValue);
+    // }
     
     return averageValue;
 }
@@ -763,22 +847,22 @@ bool readCapacitiveSensorData() {
         capacitiveSensor.lastStableValue = currentValue;
     }
     
-    if (DEBUG_SENSORS) {
-        Serial.print("Capacitive Value: ");
-        Serial.print(currentValue);
-        Serial.print(" | State: ");
-        Serial.println(capacitiveSensor.isDetecting ? "BOTTLE DETECTED" : "NO BOTTLE");
-    }
+    // if (DEBUG_SENSORS) {
+    //     Serial.print("Capacitive Value: ");
+    //     Serial.print(currentValue);
+    //     Serial.print(" | State: ");
+    //     Serial.println(capacitiveSensor.isDetecting ? "BOTTLE DETECTED" : "NO BOTTLE");
+    // }
 
     return capacitiveSensor.isDetecting;
 }
 int readInductiveSensorData() {
     delay(50);  // Short delay for sensor stabilization
     int reading = digitalRead(inductiveSensorPin);
-    if (DEBUG_SENSORS) {
-        Serial.print("Inductive Reading: ");
-        Serial.println(reading);
-    }
+    // if (DEBUG_SENSORS) {
+    //     Serial.print("Inductive Reading: ");
+    //     Serial.println(reading);
+    // }
     return reading;
 }
 bool isBottleFullyRemoved() {
@@ -825,9 +909,9 @@ void setupCapacitiveSensor() {
     pinMode(CAPACITIVE_SENSOR_PIN, INPUT);
     capacitiveSensor = CapacitiveSensorState(); // Initialize using constructor
     
-    if (DEBUG_SENSORS) {
-        testCapacitiveSensor();
-    }
+    // if (DEBUG_SENSORS) {
+    //     testCapacitiveSensor();
+    // }
 }
 // Add this to your setup() function
 void sensorSetup() {
@@ -840,18 +924,27 @@ void sensorSetup() {
 }
 
 void rotateServo(Servo &servo, int angle) {
+    // Ensure angle is within valid range
+    angle = constrain(angle, 0, 120);
     servo.write(angle);
+    delay(15); // Small delay to allow servo to reach position
 }
 
 
 void openCloseBinLid(int lidNum, bool toOpen) {
-    int angle = toOpen ? 90 : 0;
-    Servo &servo = (lidNum == 1) ? servo1 : servo2;
-    rotateServo(servo, angle);
+    if (lidNum == 1) {
+        // Servo 1: Rotate to 120 degrees when opening, 0 when closing
+        int angle = toOpen ? 120 : 0;
+        rotateServo(servo1, angle);
+    } else if (lidNum == 2) {
+        // Servo 2: Always rotate to 90 degrees when opening
+        int angle = toOpen ? 90 : 0;
+        rotateServo(servo2, angle);
+    }
 }
 void waitToRemoveObject() {
     lcd.clear();
-    lcd.print("Remove Bottle!");
+    lcd.print(F("Remove Bottle!"));
     openCloseBinLid(1, true);
     
     unsigned long startTime = millis();
@@ -861,7 +954,7 @@ void waitToRemoveObject() {
         // Timeout after 10 seconds
         if (millis() - startTime > 10000) {
             lcd.clear();
-            lcd.print("Timeout!");
+            lcd.print(F("Timeout!"));
             break;
         }
         delay(100);
@@ -890,7 +983,7 @@ bool verifyObject() {
     while (!verificationComplete && (millis() - startTime < 3000)) {  // 5 second timeout
         ledStatusCode(102);
         lcd.clear();
-        lcd.print("Verifying....");
+        lcd.print(F("Verifying...."));
         
         // Get sensor readings
         bool capacitiveReading = readCapacitiveSensorData();
@@ -906,7 +999,7 @@ bool verifyObject() {
         // Check if both sensors detect correctly
         if (getCapacitiveSensorValue() >= DETECTION_THRESHOLD) {
             lcd.clear();
-            lcd.print("Verified!");
+            lcd.print(F("Verified!"));
             ledStatusCode(200);
             
             // Open second lid to drop bottle
@@ -920,7 +1013,7 @@ bool verifyObject() {
         // If we've waited at least 2 seconds and verification failed
         else if (millis() - startTime >= 2000) {
             lcd.clear();
-            lcd.print("Invalid object");
+            lcd.print(F("Invalid object"));
             ledStatusCode(404);
             
             // Handle invalid object
@@ -938,9 +1031,9 @@ bool verifyObject() {
     // Handle timeout case
     if (!verificationComplete) {
         lcd.clear();
-        lcd.print("Verification");
+        lcd.print(F("Verification"));
         lcd.setCursor(0, 1);
-        lcd.print("timeout!");
+        lcd.print(F("timeout!"));
         ledStatusCode(404);
         waitToRemoveObject();
         return false;
@@ -1002,21 +1095,21 @@ void depositAction() {
     
     displayNokiaStatus("Ready for Bottle", BOTTLE_ICON);
     lcd.clear();
-    lcd.print("Opening bin....");
+    lcd.print(F("Opening bin...."));
     openCloseBinLid(1, true);
     
     displayNokiaStatus("Insert Bottle", BOTTLE_ICON);
     lcd.clear();
-    lcd.print("Insert Bottle!");
+    lcd.print(F("Insert Bottle!"));
     
     waitForObjectPresence();
     if (verifyObject()) {
         totalPoints++;
         displayNokiaStatus("Success!", BOTTLE_ICON);
         lcd.clear();
-        lcd.print("Deposit success!");
+        lcd.print(F("Deposit success!"));
         lcd.setCursor(0, 1);
-        lcd.print("Points: ");
+        lcd.print(F("Points: "));
         lcd.print(totalPoints);
         delay(2000);
         currentMenu = &postDepositMenu;
@@ -1037,7 +1130,10 @@ void redeemAction() {
     
     displayNokiaStatus("Present Card", CARD_ICON);
     lcd.clear();
-    lcd.print("Present RFID card");
+    lcd.print("Present RFID");
+    lcd.setCursor(0,1);
+    lcd.print("Card");
+
 
     unsigned long startTime = millis();
     while (millis() - startTime < 10000) {
@@ -1123,7 +1219,15 @@ void setUpRFID() {
 }
 
 bool detectCard() {
-    return mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial();
+    // First, verify the RFID module is still responding
+    byte version = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
+    if (version != 0x91 && version != 0x92) {
+        // RFID module not responding correctly, try to reinitialize
+        Serial.println(F("RFID error - reinitializing..."));
+        if (!initializeRFID()) {
+            return false;
+        }
+    }
 }
 
 int readPoints() {
@@ -1229,8 +1333,22 @@ void setup() {
     Serial.begin(9600);
     setUpRFID();
     sim800lv2.begin(9600);
+    delay(3000);  // Give the module time to initialize
+    
+    // Set SMS text mode
+    sim800lv2.println("AT");
+    delay(1000);
+    sim800lv2.println("AT+CMGF=1"); // Set SMS to text mode
+    delay(1000);
+    sim800lv2.println("AT+CNMI=1,2,0,0,0"); // Set new message notifications
     delay(1000);
     
+    // Test if module is responding
+    sim800lv2.println("AT");
+    delay(1000);
+    // You might want to check response here
+    
+    // Initial test message
     sendSMS("PISO-BOTE system initialized");
 
     scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
@@ -1288,21 +1406,62 @@ void loop() {
 
 
 void sendSMS(String message) {
+    Serial.println("Sending SMS...");
+    
+    // Clear any pending serial data
+    while(sim800lv2.available()) {
+        sim800lv2.read();
+    }
+    
+    // Set SMS mode
     sim800lv2.println("AT+CMGF=1");
     delay(1000);
-    sim800lv2.println("AT+CMGS=\"" + maintainerNum + "\"");
+    
+    // Set message destination
+    sim800lv2.print("AT+CMGS=\"");
+    sim800lv2.print(maintainerNum);
+    sim800lv2.println("\"");
     delay(1000);
-    sim800lv2.println(message);
-    delay(100);
-    sim800lv2.println((char)26);
-    delay(1000);
-    Serial.println("Owner has been notified!");
+    
+    // Check for ">" response
+    if(sim800lv2.find(">")) {
+        // Send message content
+        sim800lv2.println(message);
+        delay(500);
+        
+        // Send message termination character
+        sim800lv2.write(0x1A);  // Ctrl+Z character
+        delay(1000);
+        
+        // Wait for and check response
+        unsigned long start = millis();
+        bool success = false;
+        
+        while (millis() - start < 10000) {  // 10-second timeout
+            if (sim800lv2.available()) {
+                String response = sim800lv2.readString();
+                if (response.indexOf("OK") != -1) {
+                    success = true;
+                    break;
+                }
+            }
+            delay(100);
+        }
+        
+        if (success) {
+            Serial.println("SMS sent successfully!");
+        } else {
+            Serial.println("SMS sending failed - timeout");
+        }
+    } else {
+        Serial.println("SMS sending failed - no prompt received");
+    }
 }
 
 bool isBinFull() {
     unsigned int duration = sonar.ping_median(ITERATIONS);
     float distance = (duration / 2.0) * 0.0343;
-    if (distance > 0 && distance <= 5) {
+    if (distance > 0 && distance <= 10) {
         Serial.println("Bin full! Entering maintenance mode...");
         sendSMS("Alert: The PISO-BOTE is full! Please empty it.");
         ledStatusCode(404); 
@@ -1436,23 +1595,4 @@ void dispenseCoin(int count) {
     delay(2000);
 }
 
-void debugSensorReadings() {
-    if (DEBUG_SENSORS) {
-        Serial.println("\n=== Sensor Readings ===");
-        
-        // Capacitive sensor
-        int capValue = getCapacitiveSensorValue();
-        bool isDetecting = readCapacitiveSensorData();
-        Serial.print("Capacitive Raw Value: ");
-        Serial.print(capValue);
-        Serial.print(" | Detecting: ");
-        Serial.println(isDetecting ? "YES" : "NO");
-        
-        // Inductive sensor
-        int indValue = readInductiveSensorData();
-        Serial.print("Inductive Value: ");
-        Serial.println(indValue == HIGH ? "HIGH" : "LOW");
-        
-        Serial.println("====================\n");
-    }
-}
+
