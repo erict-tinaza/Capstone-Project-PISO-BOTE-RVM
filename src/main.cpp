@@ -227,6 +227,7 @@ void adjustBrightnessAction();
 void backToMainAction();
 void debugSensorReadings();
 void testRFIDCommunication();
+void postDepositRedeemAction();
 // Menu structure
 struct MenuItem
 {
@@ -254,8 +255,9 @@ MenuItem settingsMenuItems[] = {
 
 MenuItem postDepositMenuItems[] = {
     {"Insert", insertAnotherBottleAction},
-    {"Redeem", redeemPointsAction},
-    {"Store", storePointsAction}};
+    {"Redeem", postDepositRedeemAction},  // Use the new direct redemption function
+    {"Store", storePointsAction}
+};
 
 // Menu structures - KEEP THESE
 Menu mainMenu = {mainMenuItems, 3, 0, "Main Menu"};
@@ -272,6 +274,46 @@ struct DisplayState
 } displayState;
 
 // Function Implementation
+void postDepositRedeemAction()
+{
+    // Check if there are any points to redeem
+    if (totalPoints <= 0) {
+        delayWithMsg(2000, "No points to", "redeem!", 404);
+        return;
+    }
+
+    lcd.clear();
+    lcd.print("Redeem Points");
+    lcd.setCursor(0, 1);
+    lcd.print("Points: ");
+    lcd.print(totalPoints);
+
+    // Simple confirmation delay with option to cancel
+    delayWithMsg(2000, "Redeeming " + String(totalPoints), "Hold SELECT to cancel", 102);
+    
+    // Check if user wants to cancel (holding select button)
+    unsigned long startTime = millis();
+    while (digitalRead(selectButton) == LOW) {
+        if (millis() - startTime > 2000) {  // 2-second hold to cancel
+            delayWithMsg(2000, "Redemption", "Cancelled", 404);
+            currentMenu = &mainMenu;
+            updateMenuDisplay();
+            return;
+        }
+        delay(50);
+    }
+
+    // Proceed with redemption
+    int pointsToDispense = totalPoints;
+    totalPoints = 0;  // Clear the points since we're dispensing all
+
+    delayWithMsg(2000, "Redeeming: " + String(pointsToDispense), "Please wait...", 200);
+    dispenseCoin(pointsToDispense);
+    delayWithMsg(2000, "Redeemed: " + String(pointsToDispense), "Thank you!", 200);
+    
+    currentMenu = &mainMenu;
+    updateMenuDisplay();
+}
 void setupCoinHopper()
 {
     // Configure pins with proper pullup/pulldown
