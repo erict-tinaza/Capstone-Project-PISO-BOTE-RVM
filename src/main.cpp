@@ -9,7 +9,7 @@
 #include <Adafruit_PCD8544.h>
 
 // Constant Variables
-const int POINTS_BLOCK = 4;
+//const int POINTS_BLOCK = 4;
 const int MAX_DISTANCE = 20;
 const int ITERATIONS = 5;
 const float MAX_WEIGHT = 500.00;
@@ -53,12 +53,12 @@ CapacitiveSensorState capacitiveSensor;
 const int TRIGGER_PIN = 22;
 const int ECHO_PIN = 23;
 // RGB LED
-const int PIN_RED = 16;
-const int PIN_GREEN = 17;
-const int PIN_BLUE = 18;
+const int PIN_RED = 32;
+const int PIN_GREEN = 33;
+const int PIN_BLUE = 34;
 // RFID
 const int SS_PIN = 53;
-const int RST_PIN = 2;
+const int RST_PIN = 49;
 // SIM Module
 const int SIM_RX = 10;
 const int SIM_TX = 11;
@@ -166,6 +166,10 @@ bool maintenanceMode = false;
 String maintainerNum = "+639932960906";
 const int MAX_RFID_INIT_ATTEMPTS = 3;
 const int RFID_RESET_DELAY = 50;
+const byte POINTS_BLOCK = 1;      // Data block for storing points
+const byte SECTOR_NUM = 1;        // Using sector 1 (blocks 4-7)
+const byte TRAILER_BLOCK = 7;     // Sector 1 trailer block
+const int MAX_POINTS = 999;       // Maximum allowed points
 
 String previousLcdLine1;
 String previousLcdLine2;
@@ -314,6 +318,35 @@ void postDepositRedeemAction()
     currentMenu = &mainMenu;
     updateMenuDisplay();
 }
+// Add this helper function to initialize a new card
+bool initializeCard() {
+    Serial.println(F("Initializing new card..."));
+    
+    // Authenticate
+    MFRC522::StatusCode status = mfrc522.PCD_Authenticate(
+        MFRC522::PICC_CMD_MF_AUTH_KEY_A,
+        POINTS_BLOCK,
+        &key,
+        &(mfrc522.uid)
+    );
+    
+    if (status != MFRC522::STATUS_OK) {
+        Serial.println(F("Authentication failed for initialization"));
+        return false;
+    }
+    
+    // Initialize with 0 points
+    byte buffer[16] = {0};
+    status = mfrc522.MIFARE_Write(POINTS_BLOCK, buffer, 16);
+    
+    if (status != MFRC522::STATUS_OK) {
+        Serial.println(F("Failed to initialize card"));
+        return false;
+    }
+    
+    Serial.println(F("Card initialized successfully"));
+    return true;
+}
 void setupCoinHopper()
 {
     // Configure pins with proper pullup/pulldown
@@ -385,25 +418,6 @@ bool initializeRFID()
 
     return initialized;
 }
-void setupRFIDSystem()
-{
-    pinMode(RST_PIN, OUTPUT);
-
-    if (!initializeRFID())
-    {
-        // Handle initialization failure
-        Serial.println(F("RFID initialization failed!"));
-        // Maybe add an error LED indication or display message
-        lcd.clear();
-        lcd.print(F("RFID Init Failed"));
-        // You might want to retry or halt the system
-        return;
-    }
-
-    // Test RFID communication
-    testRFIDCommunication();
-}
-
 // Add this function to verify RFID is working
 void testRFIDCommunication()
 {
@@ -1445,98 +1459,201 @@ void redeemPointsAction()
     }
 }
 
-void setUpRFID()
-{
+void setUpRFID() {
+    Serial.println(F("Initializing RFID system..."));
+    
+    // Initialize SPI bus first
     SPI.begin();
+    
+    // Configure RFID module pins
+    pinMode(RST_PIN, OUTPUT);
+    digitalWrite(RST_PIN, HIGH);
+    delay(50);  // Short delay after power up
+    
+    // Initialize MFRC522
     mfrc522.PCD_Init();
-    for (byte i = 0; i < 6; i++)
-    {
+    delay(100);  // Give time for initialization
+    
+    // Check if module is responding
+    byte version = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
+    
+    if (version == 0x91 || version == 0x92) {
+        Serial.println(F("MFRC522 Initialized"));
+        Serial.print(F("Firmware Version: 0x"));
+        Serial.println(version, HEX);
+    } else {
+        Serial.println(F("Warning: Unknown MFRC522 version"));
+        Serial.print(F("Version: 0x"));
+        Serial.println(version, HEX);
+    }
+    
+    // Turn on the antenna
+    mfrc522.PCD_AntennaOn();
+    delay(50);
+    
+    // Set antenna gain to maximum
+    mfrc522.PCD_SetAntennaGain(mfrc522.RxGain_max);
+    
+    // Initialize authentication key (factory default)
+    for (byte i = 0; i < 6; i++) {
         key.keyByte[i] = 0xFF;
     }
-    Serial.println("RFID System ready. Present a card.");
-}
-
-bool detectCard()
-{
-    // First, verify the RFID module is still responding
-    byte version = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
-    if (version != 0x91 && version != 0x92)
-    {
-        // RFID module not responding correctly, try to reinitialize
-        Serial.println(F("RFID error - reinitializing..."));
-        if (!initializeRFID())
-        {
-            return false;
+    
+    // Test communication
+    bool success = false;
+    for (int i = 0; i < MAX_RFID_INIT_ATTEMPTS; i++) {
+        if (mfrc522.PCD_PerformSelfTest()) {
+            success = true;
+            break;
         }
+        delay(RFID_RESET_DELAY);
     }
+    
+    if (success) {
+        Serial.println(F("RFID self-test passed"));
+        // Reset the MFRC522 after self-test
+        mfrc522.PCD_Reset();
+        mfrc522.PCD_Init();
+    } else {
+        Serial.println(F("Warning: RFID self-test failed"));
+    }
+    
+    // Final initialization
+    mfrc522.PCD_Init();
+    delay(50);
+    
+    Serial.println(F("RFID setup complete"));
 }
 
-int readPoints()
-{
-    byte buffer[18];
-    byte size = sizeof(buffer);
-
-    MFRC522::StatusCode status = authenticateBlock(POINTS_BLOCK);
-    if (status != MFRC522::STATUS_OK)
-    {
-        Serial.println("Authentication Failed.");
-        return -1;
-    }
-
-    status = mfrc522.MIFARE_Read(POINTS_BLOCK, buffer, &size);
-    if (status != MFRC522::STATUS_OK)
-    {
-        Serial.println("Reading failed.");
-        return -1;
-    }
-    int points = (buffer[0] << 8) | buffer[1]; // Combine two bytes into an int
-    return points;
-}
-
-bool writePoints(int points)
-{
-    noInterrupts();
-    byte buffer[16];
-    buffer[0] = (points >> 8) & 0xFF; // High byte
-    buffer[1] = points & 0xFF;        // Low byte
-
-    MFRC522::StatusCode status = authenticateBlock(POINTS_BLOCK);
-    if (status != MFRC522::STATUS_OK)
-    {
-        Serial.println("Authentication failed");
+bool detectCard() {
+    // Reset the loop if no new card is present
+    if (!mfrc522.PICC_IsNewCardPresent()) {
         return false;
     }
 
-    status = mfrc522.MIFARE_Write(POINTS_BLOCK, buffer, 16);
-    if (status != MFRC522::STATUS_OK)
-    {
-        Serial.println("Writing failed");
+    // Select one of the cards
+    if (!mfrc522.PICC_ReadCardSerial()) {
         return false;
     }
-    Serial.println("Points updated successfully");
+
+    // Card is detected
+    Serial.print(F("\nCard UID: "));
+    for (byte i = 0; i < mfrc522.uid.size; i++) {
+        Serial.print(mfrc522.uid.uidByte[i] < 0x10 ? " 0" : " ");
+        Serial.print(mfrc522.uid.uidByte[i], HEX);
+    }
+    Serial.println();
+
+    // Print card type
+    MFRC522::PICC_Type piccType = mfrc522.PICC_GetType(mfrc522.uid.sak);
+    Serial.print(F("Card type: "));
+    Serial.println(mfrc522.PICC_GetTypeName(piccType));
+
     return true;
 }
 
+int readPoints() {
+    byte buffer[18];
+    byte size = sizeof(buffer);
+
+    // Debug output
+    Serial.println(F("Reading points..."));
+
+    // Authenticate using key A
+    MFRC522::StatusCode status = mfrc522.PCD_Authenticate(
+        MFRC522::PICC_CMD_MF_AUTH_KEY_A,
+        POINTS_BLOCK,  // The block we want to read
+        &key,          // Key A
+        &(mfrc522.uid)
+    );
+
+    if (status != MFRC522::STATUS_OK) {
+        Serial.println(F("Authentication failed"));
+        return -1;
+    }
+
+    // Read the block
+    status = mfrc522.MIFARE_Read(POINTS_BLOCK, buffer, &size);
+    if (status != MFRC522::STATUS_OK) {
+        Serial.println(F("Reading failed"));
+        return -1;
+    }
+
+    // The points are stored in the first two bytes
+    int points = (buffer[0] << 8) | buffer[1];
+    
+    Serial.print(F("Points read: "));
+    Serial.println(points);
+
+    return points;
+}
+bool writePoints(int points) {
+    if (points < 0 || points > MAX_POINTS) {
+        Serial.println(F("Invalid points value"));
+        return false;
+    }
+
+    Serial.print(F("Writing points: "));
+    Serial.println(points);
+
+    byte buffer[16] = {0};  // Clear buffer
+    buffer[0] = (points >> 8) & 0xFF;  // High byte
+    buffer[1] = points & 0xFF;         // Low byte
+
+    // Authenticate using key A
+    MFRC522::StatusCode status = mfrc522.PCD_Authenticate(
+        MFRC522::PICC_CMD_MF_AUTH_KEY_A,
+        POINTS_BLOCK,
+        &key,
+        &(mfrc522.uid)
+    );
+
+    if (status != MFRC522::STATUS_OK) {
+        Serial.println(F("Authentication failed"));
+        return false;
+    }
+
+    // Write the block
+    status = mfrc522.MIFARE_Write(POINTS_BLOCK, buffer, 16);
+    if (status != MFRC522::STATUS_OK) {
+        Serial.println(F("Writing failed"));
+        return false;
+    }
+
+    Serial.println(F("Write successful"));
+    return true;
+}
+
+MFRC522::StatusCode authenticateBlock(byte blockNumber) {
+    // Make sure we're not trying to access a sector trailer
+    if ((blockNumber + 1) % 4 == 0) {
+        Serial.println(F("Error: Cannot access sector trailer"));
+        return MFRC522::STATUS_ERROR;
+    }
+
+    return mfrc522.PCD_Authenticate(
+        MFRC522::PICC_CMD_MF_AUTH_KEY_A,
+        blockNumber,
+        &key,
+        &(mfrc522.uid)
+    );
+}
 MFRC522::StatusCode authenticateBlock(int blockNumber)
 {
     return mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A,
                                     blockNumber, &key, &(mfrc522.uid));
 }
-void storePointsAction()
-{
+void storePointsAction() {
     lcd.clear();
     lcd.print("Present RFID Card");
     unsigned long startTime = millis();
-    while (millis() - startTime < 10000)
-    {
-        if (detectCard())
-        {
-            if (writePoints(totalPoints))
-            {
+    
+    while (millis() - startTime < 10000) {
+        if (detectCard()) {
+            ledStatusCode(102); // Processing
+            if (writePoints(totalPoints)) {
                 delayWithMsg(2000, "Points stored!", "Total: " + String(totalPoints), 200);
-            }
-            else
-            {
+            } else {
                 delayWithMsg(2000, "Failed to store", "points. Try again.", 404);
             }
             mfrc522.PICC_HaltA();
@@ -1552,7 +1669,6 @@ void storePointsAction()
     currentMenu = &mainMenu;
     updateMenuDisplay();
 }
-
 void setup()
 {
     // Start serial first for debugging
