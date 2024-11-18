@@ -72,8 +72,8 @@ const int READINGS_COUNT = 5;             // Number of readings to average
 const float STABILITY_THRESHOLD = 1.0;    // Maximum variation between readings
 const int READING_DELAY = 100;
 // LDR & LED
-const int LDR_PIN = A1;
-const int LED_INLET_PIN = 12;
+const int LDR_PIN = 46;
+const int LED_INLET_PIN = 47;
 // Coin Hopper
 const int coinHopperSensor_PIN = 28;
 const int relayPin = 30;
@@ -1162,6 +1162,7 @@ void waitToRemoveObject()
 }
 bool verifyObject()
 {
+    controlLedInlet(true);
     if (!isObjectInside)
     {
         return false;
@@ -1199,7 +1200,7 @@ bool verifyObject()
         if (getCapacitiveSensorValue() >= DETECTION_THRESHOLD)
         {
             // Check all three conditions: capacitive, inductive, and weight
-            if (readInductiveSensorData() == 1 && isWeightAcceptable())
+            if (readInductiveSensorData() == 1 && isWeightAcceptable() && isObjectClear())
             {
                 lcd.clear();
                 lcd.print(F("Verified!"));
@@ -1258,7 +1259,7 @@ bool verifyObject()
         waitToRemoveObject();
         return false;
     }
-
+    controlLedInlet(false);
     return verificationResult;
 }
 void navigateMenu(int direction)
@@ -1279,29 +1280,26 @@ void selectMenuItem()
         ;
 }
 // Example of how to use in waitForObjectPresence
-void waitForObjectPresence()
-{
+void waitForObjectPresence() {
     unsigned long startTime = millis();
     bool objectDetected = false;
+    
+    controlLedInlet(true);  // Turn on LED as soon as waiting starts
 
-    while (!objectDetected)
-    {
+    while (!objectDetected) {
         ledStatusCode(102);
 
-        if (readCapacitiveSensorData())
-        {
-            // Additional confirmation check to avoid false positives
-            delay(100); // Short delay for stability
-            if (readCapacitiveSensorData())
-            { // Double-check the reading
+        if (readCapacitiveSensorData()) {
+            delay(100);
+            if (readCapacitiveSensorData()) {
                 objectDetected = true;
                 break;
             }
         }
 
-        if (millis() - startTime >= 3000)
-        {
+        if (millis() - startTime >= 3000) {
             ledStatusCode(404);
+            controlLedInlet(false);  // Turn off LED if no object detected
             delayWithMsg(2000, "No bottle", "detected!", 404);
             delayWithMsg(2000, "Lid closing", "remove hand", 404);
             openCloseBinLid(1, false);
@@ -1313,6 +1311,7 @@ void waitForObjectPresence()
 
     Serial.println("Bottle detected!");
     isObjectInside = true;
+    // LED stays on for verification process
 }
 
 void depositAction()
@@ -1644,28 +1643,80 @@ MFRC522::StatusCode authenticateBlock(int blockNumber)
                                     blockNumber, &key, &(mfrc522.uid));
 }
 void storePointsAction() {
+    if (totalPoints <= 0) {
+        delayWithMsg(2000, "No points to", "store!", 404);
+        currentMenu = &mainMenu;
+        updateMenuDisplay();
+        return;
+    }
+
+    // First attempt to store on RFID card
     lcd.clear();
     lcd.print("Present RFID Card");
-    unsigned long startTime = millis();
+    lcd.setCursor(0, 1);
+    lcd.print("Points: ");
+    lcd.print(totalPoints);
     
+    unsigned long startTime = millis();
+    bool cardDetected = false;
+    
+    // Try to detect card for 10 seconds
     while (millis() - startTime < 10000) {
         if (detectCard()) {
+            cardDetected = true;
             ledStatusCode(102); // Processing
             if (writePoints(totalPoints)) {
                 delayWithMsg(2000, "Points stored!", "Total: " + String(totalPoints), 200);
+                mfrc522.PICC_HaltA();
+                mfrc522.PCD_StopCrypto1();
+                currentMenu = &mainMenu;
+                updateMenuDisplay();
+                totalPoints = 0;
+                return;
             } else {
-                delayWithMsg(2000, "Failed to store", "points. Try again.", 404);
+                // Card detected but writing failed
+                delayWithMsg(2000, "Failed to store", "Converting to coins", 404);
+                break;
             }
-            mfrc522.PICC_HaltA();
-            mfrc522.PCD_StopCrypto1();
-            currentMenu = &mainMenu;
-            updateMenuDisplay();
-            totalPoints = 0;
-            return;
         }
         delay(100);
     }
-    delayWithMsg(2000, "No card detected", "", 404);
+
+    // If we reach here, either:
+    // 1. No card was detected within timeout
+    // 2. Card was detected but writing failed
+    if (!cardDetected) {
+        delayWithMsg(2000, "No card detected", "Converting to coins", 102);
+    }
+
+    // Fallback to coin redemption
+    lcd.clear();
+    lcd.print("Converting to");
+    lcd.setCursor(0, 1);
+    lcd.print("coin reward");
+    delay(2000);
+
+    // Confirm with user
+    delayWithMsg(2000, "Redeem " + String(totalPoints), "coins? SELECT=Yes", 102);
+    
+    // Wait for confirmation or cancellation
+    startTime = millis();
+    while (millis() - startTime < 5000) {
+        if (digitalRead(selectButton) == LOW) {
+            // User confirmed, proceed with coin dispensing
+            delayWithMsg(2000, "Dispensing coins", "Please wait...", 102);
+            dispenseCoin(totalPoints);
+            delayWithMsg(2000, "Dispensed: " + String(totalPoints), "Thank you!", 200);
+            totalPoints = 0;
+            currentMenu = &mainMenu;
+            updateMenuDisplay();
+            return;
+        }
+        delay(50);
+    }
+
+    // If we reach here, user didn't confirm within timeout
+    delayWithMsg(2000, "Operation", "cancelled", 404);
     currentMenu = &mainMenu;
     updateMenuDisplay();
 }
@@ -1960,7 +2011,7 @@ bool isWeightAcceptable() {
 }
 int readLDRSensorData()
 {
-    return analogRead(LDR_PIN);
+    return digitalRead(LDR_PIN);
 }
 
 void controlLedInlet(bool isOn)
@@ -1968,18 +2019,35 @@ void controlLedInlet(bool isOn)
     digitalWrite(LED_INLET_PIN, isOn ? HIGH : LOW);
 }
 
-bool isObjectClear()
-{
-    if (isObjectInside)
-    {
-        delay(100);
-        int lightValue = readLDRSensorData();
-        delay(100);
-        controlLedInlet(false);
-        return lightValue > 200;
+bool isObjectClear() {
+    if (!isObjectInside) {
+        return false;
     }
-    return true;
-    // TODO: change to false
+
+    const int NUM_READINGS = 5;
+    const int REQUIRED_CLEAR_READINGS = 3;
+    int clearReadings = 0;
+    
+    // LED should already be on from waitForObjectPresence()
+    
+    for (int i = 0; i < NUM_READINGS; i++) {
+        if (readLDRSensorData() == 0) {  // 0 indicates light detected
+            clearReadings++;
+        }
+        delay(100);
+    }
+    
+    bool isClear = (clearReadings >= REQUIRED_CLEAR_READINGS);
+    
+    // Display clarity status with icon based on result
+    if (isClear) {
+        delayWithMsg(1000, "Clarity Check:", "OK", 200);
+    } else {
+        delayWithMsg(1000, "Clarity Check:", "Failed", 404);
+    }
+    
+    // LED control handled by verifyObject()
+    return isClear;
 }
 void dispenseCoin(int count)
 {
