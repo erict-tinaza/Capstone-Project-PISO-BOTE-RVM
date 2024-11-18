@@ -25,7 +25,7 @@ const int servoPin2 = 37;
 
 // Capacitive sensor configuration for analog reading
 const int CAPACITIVE_SENSOR_PIN = A0; // Analog pin for capacitive sensor
-const int DETECTION_THRESHOLD = 800;  // Threshold for bottle detection (adjust if needed)
+const int DETECTION_THRESHOLD = 650;  // Threshold for bottle detection (adjust if needed)
 const int NO_BOTTLE_THRESHOLD = 500;  // Threshold for confirming bottle removal
 const int HYSTERESIS = 50;            // Prevent flickering
 const int SAMPLE_COUNT = 5;           // Number of readings to average
